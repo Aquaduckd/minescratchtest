@@ -14,8 +14,13 @@ A minimal Minecraft Java Edition server implementation built from scratch, imple
 
 ```
 minescratchtest/
-├── minecraft_protocol.py      # Core protocol implementation (data types, packet builders)
-├── packet_debug_server.py      # Main server implementation
+├── server.py                   # Server entry point (run this to start the server)
+│
+├── src/                        # Source code
+│   ├── __init__.py            # Package initialization
+│   ├── minecraft_protocol.py  # Core protocol implementation (data types, packet builders)
+│   ├── packet_debug_server.py # Main server implementation
+│   └── find_item_entity_id.py # Utility script for entity type extraction
 │
 ├── data/                       # Data files
 │   ├── server-1-21-10.jar      # Minecraft server JAR (for registry extraction)
@@ -51,7 +56,12 @@ minescratchtest/
 ### Running the Server
 
 ```bash
-python3 packet_debug_server.py
+python3 server.py
+```
+
+Or alternatively:
+```bash
+python3 -m src.packet_debug_server
 ```
 
 The server will:

@@ -83,6 +83,13 @@ class SetPlayerPositionAndRotationPacket:
 
 
 @dataclass
+class SetPlayerRotationPacket:
+    """Set Player Rotation packet structure (0x1F, serverbound)."""
+    yaw: float
+    pitch: float
+
+
+@dataclass
 class KeepAlivePacket:
     """Keep Alive packet structure (0x1B serverbound, 0x2B clientbound)."""
     keep_alive_id: int
@@ -95,6 +102,38 @@ class PlayerActionPacket:
     location: Tuple[int, int, int]  # (x, y, z) block position
     face: int  # Face being hit (0-5)
     sequence: int  # Block change sequence number
+
+
+@dataclass
+class ClickContainerPacket:
+    """Click Container packet structure (0x11, serverbound)."""
+    window_id: int  # Window ID (0 for player inventory)
+    state_id: int  # Last received state ID
+    slot: int  # Clicked slot number (Short)
+    button: int  # Button used (Byte)
+    mode: int  # Inventory operation mode (VarInt)
+    changed_slots: List[Tuple[int, int, int]]  # List of (slot_number, item_id, count) tuples
+    carried_item: Tuple[int, int]  # (item_id, count) for item carried by cursor, or (0, 0) if empty
+
+
+@dataclass
+class UseItemOnPacket:
+    """Use Item On packet structure (0x3F, serverbound)."""
+    hand: int  # 0: main hand, 1: off hand
+    location: Tuple[int, int, int]  # Block position (x, y, z)
+    face: int  # Face on which block is placed (0-5)
+    cursor_x: float  # Cursor position X (0.0-1.0)
+    cursor_y: float  # Cursor position Y (0.0-1.0)
+    cursor_z: float  # Cursor position Z (0.0-1.0)
+    inside_block: bool  # True when player's head is inside a block
+    world_border_hit: bool  # Always false in practice
+    sequence: int  # Block change sequence number
+
+
+@dataclass
+class SetHeldItemPacket:
+    """Set Held Item packet structure (0x34, serverbound)."""
+    slot: int  # Selected hotbar slot (0-8)
 
 
 class ProtocolReader:
@@ -162,6 +201,15 @@ class ProtocolReader:
             raise ValueError("Not enough data for unsigned short")
         
         value = struct.unpack('>H', self.data[self.offset:self.offset + 2])[0]
+        self.offset += 2
+        return value
+    
+    def read_short(self) -> int:
+        """Read a signed short (2 bytes, big-endian)."""
+        if self.offset + 2 > len(self.data):
+            raise ValueError("Not enough data for short")
+        
+        value = struct.unpack('>h', self.data[self.offset:self.offset + 2])[0]
         self.offset += 2
         return value
     
@@ -314,6 +362,13 @@ class ProtocolWriter:
         self.data.append(value & 0xFF)
         return self
     
+    def write_unsigned_byte(self, value: int) -> 'ProtocolWriter':
+        """Write an unsigned byte (0 to 255)."""
+        if value < 0 or value > 255:
+            raise ValueError(f"Unsigned byte value out of range: {value}")
+        self.data.append(value & 0xFF)
+        return self
+    
     def write_bool(self, value: bool) -> 'ProtocolWriter':
         """Write a boolean (1 byte, 0x00 = false, 0x01 = true)."""
         self.data.append(0x01 if value else 0x00)
@@ -403,17 +458,80 @@ class ProtocolWriter:
     
     def write_lpvec3(self, x: float, y: float, z: float) -> 'ProtocolWriter':
         """
-        Write an LpVec3 (low-precision velocity vector).
-        Each component is a VarInt representing velocity in units of 1/8000 blocks per tick.
-        """
-        # Convert float velocity to fixed-point integer (1/8000 precision)
-        x_int = int(x * 8000)
-        y_int = int(y * 8000)
-        z_int = int(z * 8000)
+        Write an LpVec3 (low-precision velocity vector) using the new packed format.
         
-        self.write_varint(x_int)
-        self.write_varint(y_int)
-        self.write_varint(z_int)
+        Format:
+        - If all coordinates are near zero (< 3.051944088384301e-5): write single byte 0x00
+        - Otherwise: pack coordinates into 48-bit value with scale factor
+          - Write 2 bytes (little-endian) + 4 bytes (big-endian)
+          - If scale factor needs continuation, write additional VarInt
+        
+        Network order: [byte1, byte2, byte6, byte5, byte4, byte3]
+        """
+        MAX_QUANTIZED_VALUE = 32766.0
+        
+        def pack(value):
+            """Pack a normalized value (-1.0 to 1.0) into 15 bits."""
+            return int(round((value * 0.5 + 0.5) * MAX_QUANTIZED_VALUE))
+        
+        # Check if all coordinates are near zero
+        max_coordinate = max(abs(x), abs(y), abs(z))
+        if max_coordinate < 3.051944088384301e-5:
+            self.write_byte(0)
+            return self
+        
+        # Calculate scale factor
+        max_coordinate_i = int(max_coordinate)
+        scale_factor = max_coordinate_i + 1 if max_coordinate > float(max_coordinate_i) else max_coordinate_i
+        
+        # Check if scale factor needs continuation (if it doesn't fit in 2 bits)
+        need_continuation = (scale_factor & 3) != scale_factor
+        
+        # Pack scale factor into lower 2 bits, with continuation flag in bit 2
+        packed_scale = (scale_factor & 3) | (4 if need_continuation else 0)
+        
+        # Pack coordinates (normalize by scale factor first)
+        scale_factor_d = float(scale_factor)
+        packed_x = pack(x / scale_factor_d) << 3
+        packed_y = pack(y / scale_factor_d) << 18
+        packed_z = pack(z / scale_factor_d) << 33
+        
+        # Combine all packed values into 48-bit integer
+        packed = packed_z | packed_y | packed_x | packed_scale
+        
+        # Extract individual bytes (as unsigned 0-255)
+        byte1_u = packed & 0xFF
+        byte2_u = (packed >> 8) & 0xFF
+        byte3_u = (packed >> 16) & 0xFF
+        byte4_u = (packed >> 24) & 0xFF
+        byte5_u = (packed >> 32) & 0xFF
+        byte6_u = (packed >> 40) & 0xFF
+        
+        # Convert unsigned bytes (0-255) to signed bytes (-128 to 127)
+        # Values >= 128 become negative: 128 -> -128, 255 -> -1
+        byte1 = byte1_u if byte1_u < 128 else byte1_u - 256
+        byte2 = byte2_u if byte2_u < 128 else byte2_u - 256
+        
+        # Write in network order: first 2 bytes little-endian, last 4 bytes big-endian
+        # Order: [byte1, byte2, byte6, byte5, byte4, byte3]
+        self.write_byte(byte1)
+        self.write_byte(byte2)
+        # Write last 4 bytes as big-endian: byte6, byte5, byte4, byte3
+        # Convert to signed bytes for write_byte, or write directly as bytes
+        byte3 = byte3_u if byte3_u < 128 else byte3_u - 256
+        byte4 = byte4_u if byte4_u < 128 else byte4_u - 256
+        byte5 = byte5_u if byte5_u < 128 else byte5_u - 256
+        byte6 = byte6_u if byte6_u < 128 else byte6_u - 256
+        # Write as 4 bytes in big-endian order
+        self.write_byte(byte6)
+        self.write_byte(byte5)
+        self.write_byte(byte4)
+        self.write_byte(byte3)
+        
+        # If scale factor needs continuation, write additional VarInt
+        if need_continuation:
+            self.write_varint(int(scale_factor >> 2))
+        
         return self
     
     def write_angle(self, angle: float) -> 'ProtocolWriter':
@@ -473,10 +591,18 @@ class PacketParser:
                 return packet_id, PacketParser._parse_set_player_position(reader)
             elif packet_id == 0x1E:  # Set Player Position and Rotation
                 return packet_id, PacketParser._parse_set_player_position_and_rotation(reader)
+            elif packet_id == 0x1F:  # Set Player Rotation
+                return packet_id, PacketParser._parse_set_player_rotation(reader)
             elif packet_id == 0x1B:  # Serverbound Keep Alive
                 return packet_id, PacketParser._parse_keep_alive(reader)
             elif packet_id == 0x28:  # Player Action
                 return packet_id, PacketParser._parse_player_action(reader)
+            elif packet_id == 0x11:  # Click Container
+                return packet_id, PacketParser._parse_click_container(reader)
+            elif packet_id == 0x3F:  # Use Item On
+                return packet_id, PacketParser._parse_use_item_on(reader)
+            elif packet_id == 0x34:  # Set Held Item (serverbound)
+                return packet_id, PacketParser._parse_set_held_item(reader)
         
         # Unknown packet
         return packet_id, None
@@ -563,6 +689,13 @@ class PacketParser:
         return SetPlayerPositionAndRotationPacket(x=x, y=y, z=z, yaw=yaw, pitch=pitch)
     
     @staticmethod
+    def _parse_set_player_rotation(reader: ProtocolReader) -> SetPlayerRotationPacket:
+        """Parse a Set Player Rotation packet (0x1F)."""
+        yaw = reader.read_float()
+        pitch = reader.read_float()
+        return SetPlayerRotationPacket(yaw=yaw, pitch=pitch)
+    
+    @staticmethod
     def _parse_keep_alive(reader: ProtocolReader) -> KeepAlivePacket:
         """Parse a Serverbound Keep Alive packet (0x1B)."""
         keep_alive_id = reader.read_long()
@@ -581,6 +714,94 @@ class PacketParser:
             face=face,
             sequence=sequence
         )
+    
+    @staticmethod
+    def _read_hashed_slot(reader: ProtocolReader) -> Tuple[int, int]:
+        """
+        Read a Hashed Slot format.
+        Returns: (item_id, count) or (0, 0) if empty
+        """
+        has_item = reader.read_bool()
+        if not has_item:
+            return (0, 0)
+        
+        item_id = reader.read_varint()
+        item_count = reader.read_varint()
+        
+        # Skip component hashes (we don't need them for basic inventory tracking)
+        # Components to add
+        components_to_add_count = reader.read_varint()
+        for _ in range(components_to_add_count):
+            component_type = reader.read_varint()  # Component type
+            component_hash = reader.read_int()  # Component data hash (CRC32C)
+        
+        # Components to remove
+        components_to_remove_count = reader.read_varint()
+        for _ in range(components_to_remove_count):
+            component_type = reader.read_varint()  # Component type
+        
+        return (item_id, item_count)
+    
+    @staticmethod
+    def _parse_click_container(reader: ProtocolReader) -> ClickContainerPacket:
+        """Parse Click Container packet (0x11, serverbound)."""
+        window_id = reader.read_varint()
+        state_id = reader.read_varint()
+        slot = reader.read_short()
+        button = reader.read_byte()
+        mode = reader.read_varint()
+        
+        # Array of changed slots
+        changed_slots_count = reader.read_varint()
+        changed_slots = []
+        for _ in range(changed_slots_count):
+            slot_number = reader.read_short()
+            item_id, count = PacketParser._read_hashed_slot(reader)
+            changed_slots.append((slot_number, item_id, count))
+        
+        # Carried item
+        carried_item = PacketParser._read_hashed_slot(reader)
+        
+        return ClickContainerPacket(
+            window_id=window_id,
+            state_id=state_id,
+            slot=slot,
+            button=button,
+            mode=mode,
+            changed_slots=changed_slots,
+            carried_item=carried_item
+        )
+    
+    @staticmethod
+    def _parse_use_item_on(reader: ProtocolReader) -> UseItemOnPacket:
+        """Parse Use Item On packet (0x3F, serverbound)."""
+        hand = reader.read_varint()
+        location = reader.read_position()
+        face = reader.read_varint()
+        cursor_x = reader.read_float()
+        cursor_y = reader.read_float()
+        cursor_z = reader.read_float()
+        inside_block = reader.read_bool()
+        world_border_hit = reader.read_bool()
+        sequence = reader.read_varint()
+        
+        return UseItemOnPacket(
+            hand=hand,
+            location=location,
+            face=face,
+            cursor_x=cursor_x,
+            cursor_y=cursor_y,
+            cursor_z=cursor_z,
+            inside_block=inside_block,
+            world_border_hit=world_border_hit,
+            sequence=sequence
+        )
+    
+    @staticmethod
+    def _parse_set_held_item(reader: ProtocolReader) -> SetHeldItemPacket:
+        """Parse Set Held Item packet (0x34, serverbound)."""
+        slot = reader.read_short()
+        return SetHeldItemPacket(slot=slot)
 
 
 class PacketBuilder:
@@ -979,6 +1200,106 @@ class PacketBuilder:
         return final_writer.to_bytes()
     
     @staticmethod
+    def build_destroy_entities(entity_ids: list) -> bytes:
+        """
+        Build a Remove Entities packet (PLAY state, packet ID 0x4B).
+        Removes entities from the client.
+        
+        Args:
+            entity_ids: List of entity IDs to destroy
+        """
+        packet_writer = ProtocolWriter()
+        packet_writer.write_varint(0x4B)  # Remove Entities packet ID (0x4B in 1.21.10, not 0x1A)
+        
+        # Count (VarInt)
+        packet_writer.write_varint(len(entity_ids))
+        
+        # Entity IDs (Array of VarInt)
+        for entity_id in entity_ids:
+            packet_writer.write_varint(entity_id)
+        
+        # Build final packet with length prefix
+        packet_data = packet_writer.to_bytes()
+        final_writer = ProtocolWriter()
+        final_writer.write_varint(len(packet_data))
+        final_writer.write_bytes(packet_data)
+        
+        return final_writer.to_bytes()
+    
+    @staticmethod
+    def build_pickup_item(
+        collected_entity_id: int,
+        collector_entity_id: int,
+        pickup_count: int
+    ) -> bytes:
+        """
+        Build a Pickup Item packet (PLAY state, packet ID 0x7A).
+        Triggers the animation of an item flying towards the collector.
+        
+        Args:
+            collected_entity_id: Entity ID of the item being picked up
+            collector_entity_id: Entity ID of the player/entity collecting (usually player ID 1)
+            pickup_count: Number of items in the stack being collected
+        """
+        packet_writer = ProtocolWriter()
+        packet_writer.write_varint(0x7A)  # Pickup Item packet ID
+        
+        # Collected Entity ID (VarInt)
+        packet_writer.write_varint(collected_entity_id)
+        
+        # Collector Entity ID (VarInt)
+        packet_writer.write_varint(collector_entity_id)
+        
+        # Pickup Item Count (VarInt)
+        packet_writer.write_varint(pickup_count)
+        
+        # Build final packet with length prefix
+        packet_data = packet_writer.to_bytes()
+        final_writer = ProtocolWriter()
+        final_writer.write_varint(len(packet_data))
+        final_writer.write_bytes(packet_data)
+        
+        return final_writer.to_bytes()
+    
+    @staticmethod
+    def build_set_container_slot(window_id: int, state_id: int, slot: int, item_id: int, count: int) -> bytes:
+        """
+        Build a Set Container Slot packet (PLAY state, packet ID 0x14).
+        Updates a single slot in a container window.
+        
+        Args:
+            window_id: Window ID (0 for player inventory)
+            state_id: Server-managed sequence number for synchronization
+            slot: Slot index (Short, 0-35 for player inventory)
+            item_id: Item ID (0 for empty slot)
+            count: Item count (0 for empty slot)
+        """
+        packet_writer = ProtocolWriter()
+        packet_writer.write_varint(0x14)  # Set Container Slot packet ID
+        
+        # Window ID (VarInt)
+        packet_writer.write_varint(window_id)
+        
+        # State ID (VarInt)
+        packet_writer.write_varint(state_id)
+        
+        # Slot (Short)
+        if slot < -32768 or slot > 32767:
+            raise ValueError(f"Slot index out of range: {slot}")
+        packet_writer.write_short(slot)
+        
+        # Slot Data (Slot)
+        PacketBuilder._write_slot(packet_writer, item_id, count)
+        
+        # Build final packet with length prefix
+        packet_data = packet_writer.to_bytes()
+        final_writer = ProtocolWriter()
+        final_writer.write_varint(len(packet_data))
+        final_writer.write_bytes(packet_data)
+        
+        return final_writer.to_bytes()
+    
+    @staticmethod
     def build_block_update(x: int, y: int, z: int, block_state_id: int) -> bytes:
         """
         Build a Block Update packet (PLAY state, packet ID 0x08).
@@ -1014,15 +1335,21 @@ class PacketBuilder:
         Format: Item Count (VarInt) + Item ID (Optional VarInt) + Components (Optional)
         For simple items with no components:
         - Item Count (VarInt) = count
-        - Item ID (VarInt) = item_id
-        - Components are omitted (Optional fields are not written when 0/empty)
+        - Item ID (VarInt) = item_id (present if count > 0)
+        - Number of components to add (VarInt) = 0 (written as VarInt(0) = 1 byte)
+        - Number of components to remove (VarInt) = 0 (written as VarInt(0) = 1 byte)
+        - Components arrays are omitted when counts are 0
+        Note: Even though these are marked as "Optional", they appear to be required
+        when Item Count > 0, based on client expectations.
         """
         writer.write_varint(count)  # Item Count
         if count > 0:
-            writer.write_varint(item_id)  # Item ID
-            # Number of components to add (Optional VarInt) - omitted when 0
-            # Number of components to remove (Optional VarInt) - omitted when 0
-            # For simple items, we don't write any components
+            writer.write_varint(item_id)  # Item ID (present if count > 0)
+            # Number of components to add - write 0 as VarInt (1 byte)
+            writer.write_varint(0)
+            # Number of components to remove - write 0 as VarInt (1 byte)
+            writer.write_varint(0)
+            # Components arrays are omitted when counts are 0
     
     @staticmethod
     def build_spawn_entity(
@@ -1037,7 +1364,9 @@ class PacketBuilder:
         velocity_z: float = 0.0,
         pitch: float = 0.0,
         yaw: float = 0.0,
-        head_yaw: float = 0.0
+        head_yaw: float = 0.0,
+        is_living_entity: bool = False,  # Whether this is a living entity (affects Head Yaw field)
+        has_data_field: bool = True  # Whether this entity type uses the Data field
     ) -> bytes:
         """
         Build a Spawn Entity packet (PLAY state, packet ID 0x01).
@@ -1045,14 +1374,17 @@ class PacketBuilder:
         Args:
             entity_id: Unique entity ID
             entity_uuid: Entity UUID
-            entity_type: ID in minecraft:entity_type registry (e.g., 2 for item)
+            entity_type: ID in minecraft:entity_type registry
             x, y, z: Position (Double)
             velocity_x, velocity_y, velocity_z: Velocity (LpVec3)
             pitch, yaw, head_yaw: Rotation angles in degrees (Angle)
+            is_living_entity: If True, Head Yaw field is included. If False, Head Yaw is omitted.
+                            According to protocol: "Head Yaw: Only used by living entities"
             
         Note:
             For item entities, the Data field is 0. The item stack should be set
             via Entity Metadata (index 8, Slot type) after spawning.
+            Item entities are NOT living entities, so Head Yaw should be omitted.
         """
         packet_writer = ProtocolWriter()
         packet_writer.write_varint(0x01)  # Spawn Entity packet ID
@@ -1074,16 +1406,22 @@ class PacketBuilder:
         # Velocity (LpVec3)
         packet_writer.write_lpvec3(velocity_x, velocity_y, velocity_z)
         
-        # Pitch, Yaw, Head Yaw (Angle)
+        # Pitch, Yaw (Angle) - always included
         packet_writer.write_angle(pitch)
         packet_writer.write_angle(yaw)
-        packet_writer.write_angle(head_yaw)
+        
+        # Head Yaw (Angle) - only for living entities
+        # According to protocol: "Head Yaw: Only used by living entities"
+        if is_living_entity:
+            packet_writer.write_angle(head_yaw)
         
         # Data - meaning depends on entity type
-        # For item entities (type 2), Data is 0 (item stack is set via Entity Metadata)
+        # For item entities, Data is 0 (item stack is set via Entity Metadata)
         # According to Object data documentation, item entities are not listed,
-        # meaning they don't use the Data field - it should be 0
-        packet_writer.write_varint(0)
+        # which may mean the Data field should be omitted for them
+        # For now, we'll include it for all entity types unless explicitly told not to
+        if has_data_field:
+            packet_writer.write_varint(0)
         
         # Build final packet with length prefix
         packet_data = packet_writer.to_bytes()
@@ -1119,8 +1457,10 @@ class PacketBuilder:
         
         # Metadata entries
         for index, meta_type, value in metadata:
-            # Write index (VarInt)
-            packet_writer.write_varint(index)
+            # Write index (Unsigned Byte, not VarInt!)
+            if index < 0 or index > 255:
+                raise ValueError(f"Metadata index out of range: {index}")
+            packet_writer.write_unsigned_byte(index)
             # Write type (VarInt)
             packet_writer.write_varint(meta_type)
             # Write value based on type
@@ -1140,8 +1480,8 @@ class PacketBuilder:
                 # For other types, we'll need to implement them as needed
                 raise ValueError(f"Unsupported metadata type: {meta_type}")
         
-        # End marker (0xFF)
-        packet_writer.write_byte(0xFF)
+        # End marker (0xFF, written as unsigned byte)
+        packet_writer.write_unsigned_byte(0xFF)  # End of metadata array
         
         # Build final packet with length prefix
         packet_data = packet_writer.to_bytes()
