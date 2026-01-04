@@ -1,0 +1,5 @@
+# Python dependencies for Minecraft Protocol Server
+
+# Terrain generation
+noise>=1.2.2
+

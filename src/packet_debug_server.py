@@ -32,6 +32,8 @@ import time
 import threading
 import math
 import random
+from .web_server import run_web_server
+from .block_manager import BlockManager
 
 def read_varint(data, offset=0):
     """Read a VarInt from the data starting at offset."""
@@ -220,11 +222,18 @@ class ChunkLoader:
                 break
             
             try:
+                # Phase 1 & 2: Load chunk into BlockManager first, then generate packet from it
+                block_manager = None
+                if hasattr(self.player, 'world') and self.player.world:
+                    # Load chunk into BlockManager first
+                    self.player.world.load_chunk_blocks(chunk_x, chunk_z, ground_y=64)
+                    block_manager = self.player.world.block_manager
+                
+                # Phase 3: Generate packet from BlockManager (required)
                 chunk_data = PacketBuilder.build_chunk_data(
                     chunk_x=chunk_x,
                     chunk_z=chunk_z,
-                    flat_world=True,
-                    ground_y=64
+                    block_manager=block_manager
                 )
                 
                 # Thread-safe socket send
@@ -289,15 +298,17 @@ class Player:
     Encapsulates all player-specific state including position, rotation, and inventory.
     """
     
-    def __init__(self, player_uuid: uuid.UUID, view_distance: int = 10):
+    def __init__(self, player_uuid: uuid.UUID, view_distance: int = 10, world=None):
         """
         Initialize a player.
         
         Args:
             player_uuid: Unique identifier for the player
             view_distance: Server view distance for this player
+            world: Reference to the World instance (for chunk loading and block storage)
         """
         self.uuid = player_uuid
+        self.world = world  # Reference to world for storing block data
         
         # Position and rotation
         self.x = 0.0
@@ -516,12 +527,13 @@ class World:
     Represents the internal state of the game as the server sees it.
     """
     
-    def __init__(self, view_distance: int = 10):
+    def __init__(self, view_distance: int = 10, use_terrain_generation: bool = False):
         """
         Initialize world state.
         
         Args:
             view_distance: Server view distance
+            use_terrain_generation: If True, use terrain generation instead of flat world
         """
         # Player management
         self.players: Dict[uuid.UUID, Player] = {}  # Dictionary of player UUID -> Player instance
@@ -529,6 +541,22 @@ class World:
         # Entity management
         self.next_entity_id = 1000  # Start entity IDs at 1000 (player is usually 1)
         self.item_entities: Dict[int, ItemEntity] = {}  # Track all item entities: entity_id -> ItemEntity
+        
+        # BlockManager - single source of truth for block data
+        # Phase 7: Migration complete - BlockManager is now the only block storage system
+        self.block_manager = BlockManager()
+        self.use_terrain_generation = use_terrain_generation
+        
+        # Entity collision cache - store last collision check results per entity
+        # Key: entity_id -> { 'blocks_checked': set of (x,y,z), 'result': bool, 'position': (x,y,z), 'velocity': (vx,vy,vz), 'gravity_disabled': bool }
+        self.entity_collision_cache: Dict[int, dict] = {}
+        
+        # Entity update thread - continuously updates entities at 20 TPS
+        self.entity_update_stop_event = threading.Event()
+        self.entity_update_pause_event = threading.Event()  # Pause automatic updates
+        self.entity_update_pause_event.set()  # Start unpaused
+        self.entity_update_thread = threading.Thread(target=self._entity_update_worker, daemon=True)
+        self.entity_update_thread.start()
     
     def add_player(self, player: Player):
         """Add a player to the world."""
@@ -550,57 +578,512 @@ class World:
         """
         Update item entity positions based on velocity and gravity.
         Should be called periodically (e.g., every tick).
-        Handles large time deltas by updating in multiple steps.
+        Uses fixed delta_time for consistent tick-based physics at 20 TPS.
         
         Args:
             delta_time: Time step in seconds (default 0.05 = 1 tick at 20 TPS)
         """
         GRAVITY = -0.04  # Minecraft gravity per tick (blocks per tick^2)
         DRAG = 0.98  # Air resistance factor per tick
-        MAX_STEP = 0.05  # Maximum time step per iteration (1 tick)
         
         current_time = time.time()
         
         for entity_id, item_entity in list(self.item_entities.items()):
-            # Calculate time since last update
+            # Initialize last_update_time if this is the first update
             if item_entity.last_update_time == 0.0:
                 item_entity.last_update_time = current_time
-                continue
             
-            total_delta = current_time - item_entity.last_update_time
+            # Use fixed delta_time for consistent tick-based physics
+            # This ensures entities update at exactly 20 TPS
+            step_delta = delta_time
             
-            # Update in multiple steps if delta is large (catch up on missed updates)
-            remaining_delta = total_delta
-            while remaining_delta > 0:
-                # Use smaller step size for accuracy
-                step_delta = min(remaining_delta, MAX_STEP)
+            # Check if gravity should be disabled for this entity (frozen due to collision)
+            cache = self.entity_collision_cache.get(entity_id)
+            gravity_disabled = cache is not None and cache.get('gravity_disabled', False)
+            
+            # Update velocity (apply gravity and drag)
+            # Only apply gravity if not disabled (entity is not frozen)
+            if not gravity_disabled:
+                item_entity.velocity_y += GRAVITY  # Gravity is per tick, no scaling needed
+            item_entity.velocity_x *= DRAG
+            item_entity.velocity_y *= DRAG
+            item_entity.velocity_z *= DRAG
+            
+            # Check for horizontal collisions before moving (prevent moving into blocks)
+            entity_x_floor = int(item_entity.x)
+            entity_y_floor = int(item_entity.y)
+            entity_z_floor = int(item_entity.z)
+            
+            # Ensure chunk is loaded (lazy loading for collision detection)
+            chunk_x = entity_x_floor // 16
+            chunk_z = entity_z_floor // 16
+            # Phase 2: Use BlockManager to check if chunk is loaded
+            chunk_loaded = self.block_manager.is_chunk_loaded(chunk_x, chunk_z)
+            if not chunk_loaded:
+                # Chunk not loaded yet, load it now
+                # load_chunk_blocks() wrapper will delegate to block_manager AND update old block_data
+                self.load_chunk_blocks(chunk_x, chunk_z, ground_y=64)
+            
+            # Check horizontal movement in X direction
+            if item_entity.velocity_x != 0:
+                next_x = item_entity.x + item_entity.velocity_x * 1.0
+                next_x_floor = int(next_x)
+                # Check if entity would move into a block horizontally
+                if next_x_floor != entity_x_floor:
+                    check_x = next_x_floor
+                    # Check block at entity's Y level and one block above (entity might be pushed up)
+                    if self.is_block_solid(check_x, entity_y_floor, entity_z_floor) or \
+                       self.is_block_solid(check_x, entity_y_floor + 1, entity_z_floor):
+                        # Blocked - stop horizontal movement
+                        item_entity.velocity_x = 0.0
+                        # Push entity back to the edge of the current block to prevent getting stuck
+                        if item_entity.velocity_x > 0:  # Was moving positive
+                            item_entity.x = float(entity_x_floor + 1) - 0.01
+                        else:  # Was moving negative
+                            item_entity.x = float(entity_x_floor) + 0.01
+            
+            # Check horizontal movement in Z direction
+            if item_entity.velocity_z != 0:
+                next_z = item_entity.z + item_entity.velocity_z * 1.0
+                next_z_floor = int(next_z)
+                # Check if entity would move into a block horizontally
+                if next_z_floor != entity_z_floor:
+                    check_z = next_z_floor
+                    # Check block at entity's Y level and one block above (entity might be pushed up)
+                    if self.is_block_solid(entity_x_floor, entity_y_floor, check_z) or \
+                       self.is_block_solid(entity_x_floor, entity_y_floor + 1, check_z):
+                        # Blocked - stop horizontal movement
+                        item_entity.velocity_z = 0.0
+                        # Push entity back to the edge of the current block to prevent getting stuck
+                        if item_entity.velocity_z > 0:  # Was moving positive
+                            item_entity.z = float(entity_z_floor + 1) - 0.01
+                        else:  # Was moving negative
+                            item_entity.z = float(entity_z_floor) + 0.01
+            
+            # Store position before movement for collision detection
+            old_x = item_entity.x
+            old_y = item_entity.y
+            old_z = item_entity.z
+            
+            # Calculate where entity would be after movement
+            next_x = item_entity.x + item_entity.velocity_x * 1.0
+            next_y = item_entity.y + item_entity.velocity_y * 1.0
+            next_z = item_entity.z + item_entity.velocity_z * 1.0
+            
+            # Check if we can use cached collision result
+            current_position = (old_x, old_y, old_z)
+            current_velocity = (item_entity.velocity_x, item_entity.velocity_y, item_entity.velocity_z)
+            cache = self.entity_collision_cache.get(entity_id)
+            
+            needs_recheck = True
+            intersecting_solid_block = False
+            
+            if cache is not None:
+                # Check if entity has moved
+                position_changed = (abs(cache['position'][0] - old_x) > 1e-6 or
+                                  abs(cache['position'][1] - old_y) > 1e-6 or
+                                  abs(cache['position'][2] - old_z) > 1e-6)
+                velocity_changed = (abs(cache['velocity'][0] - item_entity.velocity_x) > 1e-6 or
+                                  abs(cache['velocity'][1] - item_entity.velocity_y) > 1e-6 or
+                                  abs(cache['velocity'][2] - item_entity.velocity_z) > 1e-6)
                 
-                # Update velocity (apply gravity and drag)
-                item_entity.velocity_y += GRAVITY * step_delta / 0.05  # Scale to tick-based gravity
-                item_entity.velocity_x *= DRAG ** (step_delta / 0.05)
-                item_entity.velocity_y *= DRAG ** (step_delta / 0.05)
-                item_entity.velocity_z *= DRAG ** (step_delta / 0.05)
+                # Check if any of the previously checked blocks have been updated
+                # Phase 4: Use BlockManager's updated_blocks
+                blocks_updated = False
+                if cache['blocks_checked']:
+                    updated_blocks = self.block_manager.get_updated_blocks()
+                    blocks_updated = bool(cache['blocks_checked'] & updated_blocks)
                 
-                # Update position based on velocity
-                item_entity.x += item_entity.velocity_x * step_delta
-                item_entity.y += item_entity.velocity_y * step_delta
-                item_entity.z += item_entity.velocity_z * step_delta
+                # If blocks were updated, re-enable gravity (entity might be able to fall now)
+                if blocks_updated and cache.get('gravity_disabled', False):
+                    cache['gravity_disabled'] = False
                 
-                # Simple ground collision (prevent falling below y=64 for our flat world)
-                if item_entity.y < 64.0:
-                    item_entity.y = 64.0
-                    item_entity.velocity_y = 0.0
-                    # Bounce slightly on ground (damping)
-                    item_entity.velocity_x *= 0.7
-                    item_entity.velocity_z *= 0.7
+                # Can use cache if entity hasn't moved, velocity hasn't changed, and no blocks updated
+                if not position_changed and not velocity_changed and not blocks_updated:
+                    needs_recheck = False
+                    intersecting_solid_block = cache['result']
+            
+            if needs_recheck:
+                # Check if the line segment from current position to next position intersects any solid block
+                # Use the optimized line traversal method
+                line_start = (old_x, old_y, old_z)
+                line_end = (next_x, next_y, next_z)
+                intersecting_solid_block, debug_info = self.check_line_intersects_solid_block(
+                    line_start, line_end, return_debug=True
+                )
+            
+            if intersecting_solid_block:
+                # Entity would be intersecting a solid block - stop all movement
+                # (Just detecting, not pushing out yet)
+                item_entity.velocity_x = 0.0
+                item_entity.velocity_y = 0.0
+                item_entity.velocity_z = 0.0
+                # Don't update position - keep it at old position
                 
-                remaining_delta -= step_delta
+                # Entity is now at rest - cache the collision result and disable gravity
+                if needs_recheck and debug_info:
+                    blocks_checked = set()
+                    if debug_info.get('blocks_checked'):
+                        blocks_checked = {tuple(block['pos']) for block in debug_info['blocks_checked']}
+                    
+                    self.entity_collision_cache[entity_id] = {
+                        'blocks_checked': blocks_checked,
+                        'result': intersecting_solid_block,
+                        'position': current_position,
+                        'velocity': (0.0, 0.0, 0.0),  # Entity is at rest
+                        'gravity_disabled': True  # Disable gravity while frozen
+                    }
+            else:
+                # No collision - update position
+                item_entity.x = next_x
+                item_entity.y = next_y
+                item_entity.z = next_z
+                
+                # Entity is moving - clear cache (don't cache while moving)
+                self.entity_collision_cache.pop(entity_id, None)
             
             item_entity.last_update_time = current_time
+        
+        # Clear updated blocks set after processing all entities (they've all been checked)
+        # Phase 4: Use BlockManager's updated_blocks
+        self.block_manager.clear_updated_blocks()
+    
+    def get_block_at(self, x: int, y: int, z: int) -> int:
+        """
+        Get the block ID at the given world coordinates.
+        Returns 0 (air) if the block is not loaded or out of bounds.
+        
+        Phase 3: Now delegates to BlockManager.
+        Keeping as wrapper for backward compatibility during migration.
+        
+        Args:
+            x: World X coordinate
+            y: World Y coordinate
+            z: World Z coordinate
+            
+        Returns:
+            Block ID (0 = air, 10 = dirt, 9 = grass_block, etc.)
+        """
+        # Delegate to BlockManager
+        return self.block_manager.get_block(x, y, z)
+    
+    def check_line_intersects_solid_block(self, line_start: tuple, line_end: tuple, return_debug: bool = False) -> tuple:
+        """
+        Check if a line segment intersects any solid block.
+        
+        Args:
+            line_start: (x, y, z) tuple for start of line segment
+            line_end: (x, y, z) tuple for end of line segment
+            return_debug: If True, return (intersects, debug_info) tuple instead of just bool
+            
+        Returns:
+            If return_debug is False: True if the line segment intersects any solid block, False otherwise
+            If return_debug is True: (intersects: bool, debug_info: dict)
+        """
+        old_x, old_y, old_z = line_start
+        next_x, next_y, next_z = line_end
+        
+        # Find the range of blocks the line segment passes through
+        # Use math.floor to correctly handle negative coordinates
+        # A block at integer coordinate (bx, by, bz) occupies [bx, bx+1) x [by, by+1) x [bz, bz+1)
+        # So we need to floor the coordinates to find which block contains a point
+        check_x_min = int(math.floor(min(old_x, next_x)))
+        check_x_max = int(math.floor(max(old_x, next_x))) + 1
+        check_y_min = int(math.floor(min(old_y, next_y)))
+        check_y_max = int(math.floor(max(old_y, next_y))) + 1
+        check_z_min = int(math.floor(min(old_z, next_z)))
+        check_z_max = int(math.floor(max(old_z, next_z))) + 1
+        
+        # Calculate which block contains the start position (for debugging)
+        start_block_x = int(math.floor(old_x))
+        start_block_y = int(math.floor(old_y))
+        start_block_z = int(math.floor(old_z))
+        
+        debug_info = {
+            'line_start': line_start,
+            'line_end': line_end,
+            'start_block': (start_block_x, start_block_y, start_block_z),  # Block containing start position
+            'check_range': {
+                'x': [check_x_min, check_x_max],
+                'y': [check_y_min, check_y_max],
+                'z': [check_z_min, check_z_max]
+            },
+            'blocks_checked': []
+        }
+        
+        # Helper function to check if line segment intersects AABB
+        def line_segment_intersects_aabb(line_start, line_end, box_min, box_max):
+            """Check if line segment from line_start to line_end intersects AABB [box_min, box_max]"""
+            # Use slab method for line-AABB intersection
+            dir_x = line_end[0] - line_start[0]
+            dir_y = line_end[1] - line_start[1]
+            dir_z = line_end[2] - line_start[2]
+            
+            # If line has zero length, check if point is inside box
+            if abs(dir_x) < 1e-9 and abs(dir_y) < 1e-9 and abs(dir_z) < 1e-9:
+                return (box_min[0] <= line_start[0] < box_max[0] and
+                        box_min[1] <= line_start[1] < box_max[1] and
+                        box_min[2] <= line_start[2] < box_max[2])
+            
+            # Calculate intersection with each slab
+            t_min = 0.0
+            t_max = 1.0
+            
+            # X axis
+            if abs(dir_x) < 1e-9:
+                if line_start[0] < box_min[0] or line_start[0] >= box_max[0]:
+                    return False
+            else:
+                inv_dir = 1.0 / dir_x
+                t1 = (box_min[0] - line_start[0]) * inv_dir
+                t2 = (box_max[0] - line_start[0]) * inv_dir
+                if t1 > t2:
+                    t1, t2 = t2, t1
+                t_min = max(t_min, t1)
+                t_max = min(t_max, t2)
+                if t_min > t_max:
+                    return False
+            
+            # Y axis
+            if abs(dir_y) < 1e-9:
+                if line_start[1] < box_min[1] or line_start[1] >= box_max[1]:
+                    return False
+            else:
+                inv_dir = 1.0 / dir_y
+                t1 = (box_min[1] - line_start[1]) * inv_dir
+                t2 = (box_max[1] - line_start[1]) * inv_dir
+                if t1 > t2:
+                    t1, t2 = t2, t1
+                t_min = max(t_min, t1)
+                t_max = min(t_max, t2)
+                if t_min > t_max:
+                    return False
+            
+            # Z axis
+            if abs(dir_z) < 1e-9:
+                if line_start[2] < box_min[2] or line_start[2] >= box_max[2]:
+                    return False
+            else:
+                inv_dir = 1.0 / dir_z
+                t1 = (box_min[2] - line_start[2]) * inv_dir
+                t2 = (box_max[2] - line_start[2]) * inv_dir
+                if t1 > t2:
+                    t1, t2 = t2, t1
+                t_min = max(t_min, t1)
+                t_max = min(t_max, t2)
+                if t_min > t_max:
+                    return False
+            
+            return True
+        
+        # Use 3D DDA (Digital Differential Analyzer) to traverse only blocks that the line passes through
+        # This is more efficient than checking all blocks in a bounding box
+        dx = next_x - old_x
+        dy = next_y - old_y
+        dz = next_z - old_z
+        
+        # Calculate step direction and distances
+        step_x = 1 if dx >= 0 else -1
+        step_y = 1 if dy >= 0 else -1
+        step_z = 1 if dz >= 0 else -1
+        
+        # Current block coordinates
+        current_x = int(math.floor(old_x))
+        current_y = int(math.floor(old_y))
+        current_z = int(math.floor(old_z))
+        
+        # End block coordinates
+        end_x = int(math.floor(next_x))
+        end_y = int(math.floor(next_y))
+        end_z = int(math.floor(next_z))
+        
+        # Calculate delta distances to next block boundary
+        if dx != 0:
+            delta_x = abs(1.0 / dx)
+            next_x_boundary = (current_x + (1 if step_x > 0 else 0) - old_x) / dx if dx != 0 else float('inf')
+        else:
+            delta_x = float('inf')
+            next_x_boundary = float('inf')
+            
+        if dy != 0:
+            delta_y = abs(1.0 / dy)
+            next_y_boundary = (current_y + (1 if step_y > 0 else 0) - old_y) / dy if dy != 0 else float('inf')
+        else:
+            delta_y = float('inf')
+            next_y_boundary = float('inf')
+            
+        if dz != 0:
+            delta_z = abs(1.0 / dz)
+            next_z_boundary = (current_z + (1 if step_z > 0 else 0) - old_z) / dz if dz != 0 else float('inf')
+        else:
+            delta_z = float('inf')
+            next_z_boundary = float('inf')
+        
+        # Traverse the line, checking only blocks it passes through
+        max_steps = abs(end_x - current_x) + abs(end_y - current_y) + abs(end_z - current_z) + 1
+        steps = 0
+        
+        while steps < max_steps:
+            # Check current block
+            check_x = current_x
+            check_y = current_y
+            check_z = current_z
+            
+            is_solid = self.is_block_solid(check_x, check_y, check_z)
+            block_id = self.get_block_at(check_x, check_y, check_z)
+            
+            block_info = {
+                'pos': (check_x, check_y, check_z),
+                'block_id': block_id,
+                'is_solid': is_solid,
+                'intersects': False
+            }
+            
+            if is_solid:
+                # Block is solid - check if line segment actually intersects it
+                block_min = (float(check_x), float(check_y), float(check_z))
+                block_max = (float(check_x + 1), float(check_y + 1), float(check_z + 1))
+                
+                intersects = line_segment_intersects_aabb(line_start, line_end, block_min, block_max)
+                block_info['intersects'] = intersects
+                
+                if return_debug:
+                    debug_info['blocks_checked'].append(block_info)
+                
+                if intersects:
+                    if return_debug:
+                        return True, debug_info
+                    return True
+            else:
+                if return_debug:
+                    debug_info['blocks_checked'].append(block_info)
+            
+            # Move to next block along the line
+            if next_x_boundary < next_y_boundary and next_x_boundary < next_z_boundary:
+                current_x += step_x
+                next_x_boundary += delta_x
+            elif next_y_boundary < next_z_boundary:
+                current_y += step_y
+                next_y_boundary += delta_y
+            else:
+                current_z += step_z
+                next_z_boundary += delta_z
+            
+            # Check if we've reached the end
+            if (step_x > 0 and current_x > end_x) or (step_x < 0 and current_x < end_x):
+                break
+            if (step_y > 0 and current_y > end_y) or (step_y < 0 and current_y < end_y):
+                break
+            if (step_z > 0 and current_z > end_z) or (step_z < 0 and current_z < end_z):
+                break
+            
+            steps += 1
+        
+        if return_debug:
+            return False, debug_info
+        return False
+    
+    def is_block_solid(self, x: int, y: int, z: int) -> bool:
+        """
+        Check if a block at the given coordinates is solid (not air).
+        
+        Phase 5: Now directly delegates to BlockManager.
+        Keeping as wrapper for backward compatibility during migration.
+        
+        Args:
+            x: World X coordinate
+            y: World Y coordinate
+            z: World Z coordinate
+            
+        Returns:
+            True if block is solid, False if air or not loaded
+        """
+        # Delegate directly to BlockManager
+        return self.block_manager.is_block_solid(x, y, z)  # 0 = air, anything else is solid
+    
+    def load_chunk_blocks(self, chunk_x: int, chunk_z: int, ground_y: int = 64, use_terrain: Optional[bool] = None):
+        """
+        Generate and store block data for all sections in a chunk.
+        This should be called when a chunk is loaded.
+        
+        Phase 7: Now fully delegates to BlockManager.
+        Keeping as wrapper for backward compatibility.
+        
+        Args:
+            chunk_x: Chunk X coordinate
+            chunk_z: Chunk Z coordinate
+            ground_y: Y coordinate of ground level (default 64)
+            use_terrain: If True, use terrain generation instead of flat world.
+                        If None, uses self.use_terrain_generation (set in __init__)
+        """
+        # Use instance setting if not explicitly provided
+        if use_terrain is None:
+            use_terrain = getattr(self, 'use_terrain_generation', False)
+        
+        # Delegate to BlockManager
+        self.block_manager.load_chunk(chunk_x, chunk_z, ground_y, flat_world=not use_terrain, use_terrain=use_terrain)
+    
+    def set_block(self, x: int, y: int, z: int, block_id: int):
+        """
+        Set a block at the given world coordinates.
+        Updates the internal block data for collision detection.
+        
+        Phase 7: Now fully delegates to BlockManager.
+        Keeping as wrapper for backward compatibility.
+        
+        Args:
+            x: World X coordinate
+            y: World Y coordinate
+            z: World Z coordinate
+            block_id: Block ID to set (0 = air, 10 = dirt, 9 = grass_block, etc.)
+        """
+        # Delegate to BlockManager
+        self.block_manager.set_block(x, y, z, block_id)
+    
+    def _entity_update_worker(self):
+        """
+        Background worker thread that continuously updates entities at 20 TPS (every 0.05 seconds).
+        Can be paused for step-through debugging.
+        """
+        TICK_INTERVAL = 0.05  # 20 TPS = 1 tick per 0.05 seconds
+        
+        while not self.entity_update_stop_event.is_set():
+            # Wait for pause event to be set (unpaused) or stop event
+            self.entity_update_pause_event.wait()
+            
+            if self.entity_update_stop_event.is_set():
+                break
+            
+            start_time = time.time()
+            
+            # Update all entities with fixed tick interval
+            self.update_item_entities(delta_time=TICK_INTERVAL)
+            
+            # Sleep to maintain 20 TPS
+            elapsed = time.time() - start_time
+            sleep_time = max(0, TICK_INTERVAL - elapsed)
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+    
+    def pause_entity_updates(self):
+        """Pause automatic entity updates (for step-through debugging)."""
+        self.entity_update_pause_event.clear()
+    
+    def resume_entity_updates(self):
+        """Resume automatic entity updates."""
+        self.entity_update_pause_event.set()
+    
+    def step_entity_tick(self):
+        """Manually step forward one tick of entity updates."""
+        import time
+        current_time = time.time()
+        self.update_item_entities(delta_time=0.05)
     
     def remove_item_entity(self, entity_id: int):
         """Remove an item entity from tracking."""
         self.item_entities.pop(entity_id, None)
+        # Clean up collision cache
+        self.entity_collision_cache.pop(entity_id, None)
 
 
 def get_entity_type_id(entity_name: str) -> int:
@@ -768,13 +1251,103 @@ def load_loot_tables():
     return load_loot_tables._loot_table_cache
 
 
+def get_block_state_id_from_item_id(item_id: int) -> Optional[int]:
+    """
+    Get the block state ID from an item ID.
+    Maps item registry entries to block state IDs using blocks.json.
+    
+    Args:
+        item_id: Item protocol ID
+        
+    Returns:
+        Block state ID, or None if not found or not a block item
+    """
+    import json
+    import os
+    
+    registries_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'generated', 'reports', 'registries.json')
+    blocks_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'generated', 'reports', 'blocks.json')
+    
+    # Cache for item ID -> block state ID mapping
+    if not hasattr(get_block_state_id_from_item_id, '_item_to_block_cache'):
+        get_block_state_id_from_item_id._item_to_block_cache = {}
+        
+        if os.path.exists(registries_file) and os.path.exists(blocks_file):
+            try:
+                # Load item registry
+                with open(registries_file, 'r') as f:
+                    registries_data = json.load(f)
+                
+                # Load blocks registry
+                with open(blocks_file, 'r') as f:
+                    blocks_data = json.load(f)
+                
+                # Build mapping: item ID -> block name -> block state ID
+                if 'minecraft:item' in registries_data:
+                    item_registry = registries_data['minecraft:item']
+                    if 'entries' in item_registry:
+                        entries = item_registry['entries']
+                        for item_name, item_data in entries.items():
+                            protocol_id = item_data.get('protocol_id')
+                            if protocol_id is not None and item_name in blocks_data:
+                                # This item corresponds to a block
+                                block_info = blocks_data[item_name]
+                                if 'states' in block_info and len(block_info['states']) > 0:
+                                    # Use the first/default state
+                                    block_state_id = block_info['states'][0].get('id')
+                                    if block_state_id is not None:
+                                        get_block_state_id_from_item_id._item_to_block_cache[protocol_id] = block_state_id
+            except Exception as e:
+                print(f"  │  ⚠ Warning: Could not load item/block registry for mapping: {e}")
+    
+    return get_block_state_id_from_item_id._item_to_block_cache.get(item_id)
+
+
+def get_block_name_from_state_id(block_state_id: int) -> Optional[str]:
+    """
+    Get the block name (identifier) from a block state ID.
+    Loads the mapping from blocks.json.
+    
+    Args:
+        block_state_id: Block state ID
+        
+    Returns:
+        Block identifier (e.g., 'minecraft:grass_block', 'minecraft:dirt'), or None if not found
+    """
+    import json
+    import os
+    
+    registries_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'generated', 'reports', 'blocks.json')
+    
+    # Cache for block state ID -> block name mapping
+    if not hasattr(get_block_name_from_state_id, '_block_name_cache'):
+        get_block_name_from_state_id._block_name_cache = {}
+        
+        if os.path.exists(registries_file):
+            try:
+                with open(registries_file, 'r') as f:
+                    blocks_data = json.load(f)
+                
+                # Build reverse mapping: block state ID -> block name
+                for block_name, block_info in blocks_data.items():
+                    if 'states' in block_info:
+                        for state in block_info['states']:
+                            state_id = state.get('id')
+                            if state_id is not None:
+                                get_block_name_from_state_id._block_name_cache[state_id] = block_name
+            except Exception as e:
+                print(f"  │  ⚠ Warning: Could not load block registry: {e}")
+    
+    return get_block_name_from_state_id._block_name_cache.get(block_state_id)
+
+
 def get_item_for_block(block_name: str) -> str:
     """
     Get the item name that should drop from a block using loot tables.
     
     Args:
-        block_name: Block identifier (e.g., 'minecraft:grass_block', 'minecraft:stone')
-    
+        block_name: Block identifier (e.g., 'minecraft:grass_block', 'minecraft:dirt')
+        
     Returns:
         Item identifier (e.g., 'minecraft:dirt', 'minecraft:cobblestone'), or None if no drop
     """
@@ -862,20 +1435,12 @@ def get_item_id_for_block(block_state_id: int) -> int:
             except Exception as e:
                 print(f"  │  ⚠ Warning: Could not load item registry: {e}")
     
-    # Map block state ID to block name (simplified - we'd need block registry for this)
-    # For now, use a simple heuristic:
-    # - Block state ID 1 is likely stone
-    # - Block state ID ~10 is likely grass_block
-    # In a real implementation, we'd look up the block registry
-    
-    # Simple mapping based on common block state IDs
-    if block_state_id == 1:
-        item_name = 'minecraft:stone'
-    elif block_state_id == 10:  # Approximate grass_block block state ID
-        item_name = 'minecraft:grass_block'
+    # Map block state ID to block name using the blocks.json lookup
+    block_name = get_block_name_from_state_id(block_state_id)
+    if block_name:
+        # For blocks, the item name is usually the same as the block name
+        item_name = block_name
     else:
-        # Default: try to infer from block state ID
-        # This is a fallback - ideally we'd have a proper block state -> block name -> item name mapping
         item_name = None
     
     if item_name and item_name in get_item_id_for_block._item_id_cache:
@@ -900,6 +1465,7 @@ def handle_client(client_socket, client_address):
     world = None  # Will be initialized when entering PLAY state
     player_uuid = None  # Will be set during login
     player = None  # Will be initialized when entering PLAY state
+    web_server_thread = None  # Web server thread for visualization
     
     # Keep alive tracking
     keep_alive_thread = None
@@ -1209,10 +1775,7 @@ def handle_client(client_socket, client_address):
                                                 parsed_packet.x, parsed_packet.y, parsed_packet.z
                                             )
                                             
-                                            # Update item entity positions (simulate physics)
-                                            world.update_item_entities()
-                                            
-                                            # Check for item pickups
+                                            # Check for item pickups (entities are updated by background thread)
                                             items_to_pickup = player.check_item_pickups(world.item_entities)
                                             if items_to_pickup:
                                                 for item_entity in items_to_pickup:
@@ -1453,6 +2016,25 @@ def handle_client(client_socket, client_address):
                                             x, y, z = parsed_packet.location
                                             print(f"  │  → Block broken at ({x}, {y}, {z})")
                                             
+                                            # Get the block state ID BEFORE breaking it (for loot table lookup)
+                                            block_state_id = None
+                                            block_name = None
+                                            if world:
+                                                # Get the actual block that's being broken
+                                                block_state_id = world.get_block_at(x, y, z)
+                                                
+                                                # Get block name from block state ID
+                                                block_name = get_block_name_from_state_id(block_state_id)
+                                                
+                                                if block_name:
+                                                    print(f"  │  → Breaking block: {block_name} (state ID: {block_state_id})")
+                                                else:
+                                                    print(f"  │  ⚠ Could not find block name for state ID {block_state_id}")
+                                            
+                                            # Update block data in world (set to air)
+                                            if world:
+                                                world.set_block(x, y, z, 0)  # 0 = air
+                                            
                                             # Send Block Update to set block to air (block state ID 0)
                                             try:
                                                 block_update = PacketBuilder.build_block_update(
@@ -1467,20 +2049,7 @@ def handle_client(client_socket, client_address):
                                                 print(f"  │  ✗ Error sending Block Update: {e}")
                                             
                                             # Spawn item drop using loot tables
-                                            # For now, we'll infer the block from Y coordinate
-                                            # In a real implementation, we'd track what block was actually there
-                                            # Our flat world: grass_block at y=64, stone at y=63
-                                            if world:
-                                                # Determine block name from position (heuristic for flat world)
-                                                block_name = None
-                                                if y == 64:
-                                                    block_name = 'minecraft:grass_block'
-                                                elif y == 63:
-                                                    block_name = 'minecraft:stone'
-                                                else:
-                                                    # Default to stone for other positions
-                                                    block_name = 'minecraft:stone'
-                                                
+                                            if world and block_name:
                                                 # Get item name from loot table
                                                 item_name = get_item_for_block(block_name)
                                                 
@@ -1511,6 +2080,8 @@ def handle_client(client_socket, client_address):
                                                     spawn_y = y + 0.5
                                                     spawn_z = z + 0.5
                                                     
+                                                    # Calculate velocity for block break drops (small random spread, mostly downward)
+                                                    # Block break drops should fall straight down, not be thrown in player's look direction
                                                     # Calculate velocity for block break drops (small random spread, mostly downward)
                                                     # Block break drops should fall straight down, not be thrown in player's look direction
                                                     velocity_x = (random.random() - 0.5) * 0.1  # Small random horizontal spread
@@ -1913,11 +2484,18 @@ def handle_client(client_socket, client_address):
                                                     dx, dy, dz = face_offsets.get(face, (0, 1, 0))
                                                     place_x, place_y, place_z = x + dx, y + dy, z + dz
                                                     
-                                                    # For now, place a simple block (we'd need to map item_id to block_state_id)
-                                                    # Using a placeholder block state ID - in a real implementation,
-                                                    # we'd look up the block state ID from the item ID
-                                                    # For now, just place stone (block state ID ~1) as a placeholder
-                                                    block_state_id = 1  # Placeholder - should map item_id to block_state_id
+                                                    # Map item_id to block_state_id
+                                                    block_state_id = get_block_state_id_from_item_id(item_id)
+                                                    
+                                                    if block_state_id is None:
+                                                        print(f"  │  ⚠ Could not map item ID {item_id} to block state ID, skipping block placement")
+                                                        continue
+                                                    
+                                                    # Update block data in world
+                                                    if world:
+                                                        # Determine block ID from block state ID (simplified - in reality need to map state to block)
+                                                        # For now, assume block_state_id corresponds to block ID
+                                                        world.set_block(place_x, place_y, place_z, block_state_id)
                                                     
                                                     # Send Block Update to place the block
                                                     try:
@@ -1971,10 +2549,7 @@ def handle_client(client_socket, client_address):
                                                 parsed_packet.x, parsed_packet.y, parsed_packet.z
                                             )
                                             
-                                            # Update item entity positions (simulate physics)
-                                            world.update_item_entities()
-                                            
-                                            # Check for item pickups
+                                            # Check for item pickups (entities are updated by background thread)
                                             items_to_pickup = player.check_item_pickups(world.item_entities)
                                             if items_to_pickup:
                                                 for item_entity in items_to_pickup:
@@ -2087,14 +2662,23 @@ def handle_client(client_socket, client_address):
                                 connection_state = ConnectionState.PLAY
                                 
                                 # Initialize world state
-                                world = World(view_distance=10)
+                                world = World(view_distance=10, use_terrain_generation=True)                                
+                                # Start web server for visualization (if not already started)
+                                if web_server_thread is None or not web_server_thread.is_alive():
+                                    web_server_thread = threading.Thread(
+                                        target=run_web_server,
+                                        args=('127.0.0.1', 5000, world),
+                                        daemon=True
+                                    )
+                                    web_server_thread.start()
+                                    print(f"  │  ✓ Web visualization server started at http://127.0.0.1:5000")
                                 
                                 # Create player instance
                                 if player_uuid is None:
                                     print(f"  │  ⚠ Warning: Player UUID not set, using default UUID")
                                     player_uuid = uuid.uuid4()
                                 
-                                player = Player(player_uuid, view_distance=10)
+                                player = Player(player_uuid, view_distance=10, world=world)
                                 player.update_position(0.0, 65.0, 0.0)  # Spawn position
                                 world.add_player(player)
                                 
@@ -2316,7 +2900,7 @@ def initialize_server_data():
     print(f"→ Pre-loading item registry...")
     try:
         # Trigger item ID cache loading
-        get_item_id_from_name('minecraft:stone')  # This will load the cache
+        get_item_id_from_name('minecraft:dirt')  # This will load the cache
         item_count = len(get_item_id_from_name._item_id_cache) if hasattr(get_item_id_from_name, '_item_id_cache') else 0
         print(f"✓ Loaded {item_count} item IDs")
     except Exception as e:

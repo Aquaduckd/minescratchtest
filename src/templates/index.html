@@ -1,0 +1,1201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Minecraft Server Visualization</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script>
+        // Ensure OrbitControls is available
+        if (typeof THREE !== 'undefined' && !THREE.OrbitControls) {
+            // Fallback: define OrbitControls if not loaded
+            THREE.OrbitControls = function(camera, domElement) {
+                this.object = camera;
+                this.domElement = domElement;
+                this.enableDamping = false;
+                this.dampingFactor = 0.05;
+                this.minDistance = 0;
+                this.maxDistance = Infinity;
+                this.target = new THREE.Vector3();
+                this.update = function() {};
+            };
+        }
+    </script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: #ffffff;
+            overflow: hidden;
+        }
+        
+        .container {
+            display: flex;
+            height: 100vh;
+        }
+        
+        .sidebar {
+            width: 300px;
+            background: rgba(26, 26, 46, 0.95);
+            padding: 20px;
+            overflow-y: auto;
+            border-right: 2px solid #4CAF50;
+            box-shadow: 2px 0 10px rgba(0, 0, 0, 0.5);
+        }
+        
+        .sidebar h1 {
+            color: #4CAF50;
+            margin-bottom: 20px;
+            font-size: 24px;
+            text-align: center;
+        }
+        
+        .status {
+            background: rgba(42, 42, 58, 0.8);
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            border: 1px solid #4CAF50;
+        }
+        
+        .status-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+            animation: pulse 2s infinite;
+        }
+        
+        .status-indicator.active {
+            background-color: #4CAF50;
+            box-shadow: 0 0 10px #4CAF50;
+        }
+        
+        .status-indicator.inactive {
+            background-color: #f44336;
+            animation: none;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        
+        .info {
+            background: rgba(42, 42, 58, 0.8);
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            border: 1px solid rgba(76, 175, 80, 0.3);
+        }
+        
+        .info h2 {
+            margin-top: 0;
+            margin-bottom: 10px;
+            color: #4CAF50;
+            font-size: 18px;
+        }
+        
+        .info-item {
+            margin: 8px 0;
+            padding: 8px;
+            background: rgba(26, 26, 46, 0.6);
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        
+        .info-item strong {
+            color: #81C784;
+        }
+        
+        .canvas-container {
+            flex: 1;
+            position: relative;
+            background: #0a0a0a;
+        }
+        
+        #canvas {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+        
+        .controls-hint {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 10px 15px;
+            border-radius: 5px;
+            font-size: 12px;
+            color: #aaa;
+            border: 1px solid rgba(76, 175, 80, 0.3);
+        }
+        
+        .tick-controls {
+            background: rgba(42, 42, 58, 0.8);
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            border: 1px solid rgba(76, 175, 80, 0.3);
+        }
+        
+        .tick-controls h2 {
+            margin-top: 0;
+            margin-bottom: 15px;
+            color: #4CAF50;
+            font-size: 18px;
+        }
+        
+        .tick-controls button {
+            background: #4CAF50;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            margin: 5px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: bold;
+            transition: background 0.3s;
+        }
+        
+        .tick-controls button:hover {
+            background: #45a049;
+        }
+        
+        .tick-controls button:disabled {
+            background: #666;
+            cursor: not-allowed;
+        }
+        
+        .tick-controls button.pause-btn {
+            background: #ff9800;
+        }
+        
+        .tick-controls button.pause-btn:hover {
+            background: #f57c00;
+        }
+        
+        .tick-controls button.resume-btn {
+            background: #2196F3;
+        }
+        
+        .tick-controls button.resume-btn:hover {
+            background: #1976D2;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="sidebar">
+            <h1>🎮 Server Visualization</h1>
+            
+            <div class="status">
+                <span class="status-indicator" id="statusIndicator"></span>
+                <span id="statusText">Connecting...</span>
+            </div>
+            
+            <div class="tick-controls">
+                <h2>Tick Controls</h2>
+                <button id="pauseBtn" class="pause-btn" onclick="pauseUpdates()">⏸ Pause</button>
+                <button id="resumeBtn" class="resume-btn" onclick="resumeUpdates()" style="display: none;">▶ Resume</button>
+                <button id="stepBtn" onclick="stepTick()" disabled>⏭ Step</button>
+            </div>
+            
+            <div class="info">
+                <h2>Server Status</h2>
+                <div id="serverInfo">
+                    <div class="info-item">Loading server state...</div>
+                </div>
+            </div>
+            
+            <div class="info">
+                <h2>Players</h2>
+                <div id="playersInfo">
+                    <div class="info-item">No players connected</div>
+                </div>
+            </div>
+            
+            <div class="info">
+                <h2>Entities</h2>
+                <div id="entitiesInfo">
+                    <div class="info-item">No entities in world</div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="canvas-container">
+            <canvas id="canvas"></canvas>
+            <div class="controls-hint">
+                <strong>Controls:</strong> Left Click + Drag to rotate | Right Click + Drag to pan | Scroll to zoom
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // Three.js Scene Setup
+        let scene, camera, renderer, controls;
+        let gridHelper;
+        let playerObjects = new Map();
+        let entityObjects = new Map();  // entity_id -> { current: THREE.Object3D, next: THREE.Object3D, line: THREE.Line }
+        let heightMapObjects = new Map();  // chunk key -> THREE.Group containing height map visualization
+        let checkedBlocks = new Map();  // "x,y,z" -> { wireframe: THREE.LineSegments, label: THREE.Sprite }
+        let cachedBlocks = new Map();  // "x,y,z" -> { wireframe: THREE.LineSegments, label: THREE.Sprite }
+        
+        function init3D() {
+            // Scene
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x0a0a0a);
+            // Fog centered around ground level (y=64)
+            scene.fog = new THREE.Fog(0x0a0a0a, 50, 250);
+            
+            // Camera
+            // Ground is at y=64, so position camera to view that level
+            camera = new THREE.PerspectiveCamera(
+                75,
+                window.innerWidth / window.innerHeight,
+                0.1,
+                1000
+            );
+            camera.position.set(20, 85, 20);  // Higher up to see y=64 level
+            camera.lookAt(0, 64, 0);  // Look at ground level
+            
+            // Renderer
+            const canvas = document.getElementById('canvas');
+            renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true });
+            renderer.setSize(canvas.clientWidth, canvas.clientHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            
+            // Grid - position at ground level (y=64)
+            const gridSize = 50;
+            const gridDivisions = 50;
+            gridHelper = new THREE.GridHelper(gridSize, gridDivisions, 0x4CAF50, 0x2a4a2a);
+            gridHelper.position.y = 64;  // Position grid at ground level
+            scene.add(gridHelper);
+            
+            // Axes helper (optional, for reference) - position at ground level
+            const axesHelper = new THREE.AxesHelper(10);
+            axesHelper.position.y = 64;  // Position axes at ground level
+            scene.add(axesHelper);
+            
+            // Lights
+            const ambientLight = new THREE.AmbientLight(0x404040, 0.6);
+            scene.add(ambientLight);
+            
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            directionalLight.position.set(20, 95, 20);  // Position light above ground level
+            scene.add(directionalLight);
+            
+            // Controls - try OrbitControls, fallback to basic controls
+            try {
+                if (typeof THREE.OrbitControls !== 'undefined') {
+                    controls = new THREE.OrbitControls(camera, renderer.domElement);
+                    controls.enableDamping = true;
+                    controls.dampingFactor = 0.05;
+                    controls.minDistance = 5;
+                    controls.maxDistance = 200;
+                    controls.target.set(0, 64, 0);  // Target ground level
+                } else {
+                    throw new Error('OrbitControls not available');
+                }
+            } catch (e) {
+                console.warn('OrbitControls not available, using basic mouse controls');
+                controls = { update: function() {} };
+                
+                // Basic mouse controls
+                let mouseDown = false;
+                let mouseX = 0, mouseY = 0;
+                let cameraAngleX = 0, cameraAngleY = 0;
+                let cameraDistance = 30;
+                // Start camera higher to see y=64 level
+                camera.position.set(20, 85, 20);
+                camera.lookAt(0, 64, 0);
+                
+                function updateCameraPosition() {
+                    camera.position.x = Math.sin(cameraAngleY) * Math.cos(cameraAngleX) * cameraDistance;
+                    camera.position.y = 64 + Math.sin(cameraAngleX) * cameraDistance;  // Offset by ground level
+                    camera.position.z = Math.cos(cameraAngleY) * Math.cos(cameraAngleX) * cameraDistance;
+                    camera.lookAt(0, 64, 0);  // Look at ground level
+                }
+                
+                updateCameraPosition();
+                
+                renderer.domElement.addEventListener('mousedown', (e) => {
+                    if (e.button === 0) { // Left click
+                        mouseDown = true;
+                        mouseX = e.clientX;
+                        mouseY = e.clientY;
+                    }
+                });
+                
+                renderer.domElement.addEventListener('mouseup', () => {
+                    mouseDown = false;
+                });
+                
+                renderer.domElement.addEventListener('mousemove', (e) => {
+                    if (mouseDown) {
+                        const deltaX = e.clientX - mouseX;
+                        const deltaY = e.clientY - mouseY;
+                        cameraAngleY -= deltaX * 0.01;
+                        cameraAngleX -= deltaY * 0.01;
+                        cameraAngleX = Math.max(-Math.PI/2, Math.min(Math.PI/2, cameraAngleX));
+                        mouseX = e.clientX;
+                        mouseY = e.clientY;
+                        updateCameraPosition();
+                    }
+                });
+                
+                renderer.domElement.addEventListener('wheel', (e) => {
+                    e.preventDefault();
+                    cameraDistance += e.deltaY * 0.1;
+                    cameraDistance = Math.max(5, Math.min(200, cameraDistance));
+                    updateCameraPosition();
+                });
+            }
+            
+            // Handle window resize
+            window.addEventListener('resize', onWindowResize);
+            
+            // Start animation loop
+            animate();
+        }
+        
+        function onWindowResize() {
+            const canvas = document.getElementById('canvas');
+            camera.aspect = canvas.clientWidth / canvas.clientHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(canvas.clientWidth, canvas.clientHeight);
+        }
+        
+        function animate() {
+            requestAnimationFrame(animate);
+            if (controls && controls.update) {
+                controls.update();
+            }
+            renderer.render(scene, camera);
+        }
+        
+        let isUpdating = false;
+        let updateInterval = null;
+        
+        async function updateStatus() {
+            // Prevent multiple simultaneous updates
+            if (isUpdating) {
+                return;
+            }
+            isUpdating = true;
+            
+            try {
+                // Add timeout to prevent hanging requests
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 2000); // 2 second timeout
+                
+                const response = await fetch('/api/state', {
+                    signal: controller.signal
+                });
+                clearTimeout(timeoutId);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                
+                // Update status indicator
+                    const indicator = document.getElementById('statusIndicator');
+                    const statusText = document.getElementById('statusText');
+                    
+                    if (data.status === 'active') {
+                        indicator.className = 'status-indicator active';
+                        statusText.textContent = 'Server Active';
+                    } else {
+                        indicator.className = 'status-indicator inactive';
+                        statusText.textContent = 'Server Not Initialized';
+                    }
+                    
+                    // Update server info
+                    const serverInfo = document.getElementById('serverInfo');
+                    serverInfo.innerHTML = `
+                        <div class="info-item">
+                            <strong>Status:</strong> ${data.status}
+                        </div>
+                        <div class="info-item">
+                            <strong>Players:</strong> ${data.players.length}
+                        </div>
+                        <div class="info-item">
+                            <strong>Entities:</strong> ${data.entities.length}
+                        </div>
+                    `;
+                    
+                    // Update players info
+                    const playersInfo = document.getElementById('playersInfo');
+                    if (data.players.length === 0) {
+                        playersInfo.innerHTML = '<div class="info-item">No players connected</div>';
+                    } else {
+                        playersInfo.innerHTML = data.players.map(player => `
+                            <div class="info-item">
+                                <strong>Player:</strong> ${player.uuid.substring(0, 8)}...<br>
+                                <strong>Position:</strong> (${player.x.toFixed(2)}, ${player.y.toFixed(2)}, ${player.z.toFixed(2)})<br>
+                                <strong>Rotation:</strong> yaw=${player.yaw.toFixed(2)}°, pitch=${player.pitch.toFixed(2)}°
+                            </div>
+                        `).join('');
+                    }
+                    
+                // Calculate next positions and check intersections for entities info
+                const entityInfoData = await Promise.all(data.entities.map(async entity => {
+                    const next_x = entity.x + entity.velocity_x * 1.0;
+                    const next_y = entity.y + entity.velocity_y * 1.0;
+                    const next_z = entity.z + entity.velocity_z * 1.0;
+                    
+                    let intersects = false;
+                    let debug = null;
+                    try {
+                        const controller = new AbortController();
+                        const timeoutId = setTimeout(() => controller.abort(), 1000); // 1 second timeout
+                        
+                        const response = await fetch('/api/check_line_intersection', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                line_start: [entity.x, entity.y, entity.z],
+                                line_end: [next_x, next_y, next_z],
+                                debug: true
+                            }),
+                            signal: controller.signal
+                        });
+                        clearTimeout(timeoutId);
+                        
+                        if (response.ok) {
+                            const result = await response.json();
+                            intersects = result.intersects || false;
+                            debug = result.debug || null;
+                        }
+                    } catch (error) {
+                        // Silently handle network errors - don't spam console
+                        if (error.name !== 'AbortError' && error.name !== 'TypeError') {
+                            console.error('Error checking line intersection:', error);
+                        }
+                    }
+                    
+                    return {
+                        ...entity,
+                        next_x,
+                        next_y,
+                        next_z,
+                        intersects,
+                        debug,
+                        cached_blocks: entity.cached_blocks || [],
+                        cached_result: entity.cached_result || false
+                    };
+                }));
+                
+                // Update entities info
+                const entitiesInfo = document.getElementById('entitiesInfo');
+                if (entityInfoData.length === 0) {
+                    entitiesInfo.innerHTML = '<div class="info-item">No entities in world</div>';
+                } else {
+                    entitiesInfo.innerHTML = entityInfoData.map(entity => {
+                        let debugHtml = '';
+                        if (entity.debug) {
+                            // Always show debug info
+                            debugHtml = `<br><strong style="color: #ff6b6b;">Debug:</strong><br>`;
+                            debugHtml += `Checking blocks: x=[${entity.debug.check_range.x[0]}, ${entity.debug.check_range.x[1]}], y=[${entity.debug.check_range.y[0]}, ${entity.debug.check_range.y[1]}], z=[${entity.debug.check_range.z[0]}, ${entity.debug.check_range.z[1]}]<br>`;
+                            debugHtml += `Blocks checked: ${entity.debug.blocks_checked.length}<br>`;
+                            entity.debug.blocks_checked.forEach(block => {
+                                if (block.is_solid) {
+                                    debugHtml += `  Block (${block.pos[0]}, ${block.pos[1]}, ${block.pos[2]}): id=${block.block_id}, solid=${block.is_solid}, intersects=${block.intersects}<br>`;
+                                }
+                            });
+                        }
+                        return `
+                        <div class="info-item">
+                            <strong>Entity ID:</strong> ${entity.id}<br>
+                            <strong>Position:</strong> (${entity.x.toFixed(2)}, ${entity.y.toFixed(2)}, ${entity.z.toFixed(2)})<br>
+                            <strong>Next Position:</strong> (${entity.next_x.toFixed(2)}, ${entity.next_y.toFixed(2)}, ${entity.next_z.toFixed(2)})<br>
+                            <strong>Intersecting:</strong> <span style="color: ${entity.intersects ? '#00FF00' : '#FFFFFF'}">${entity.intersects ? 'YES' : 'NO'}</span><br>
+                            <strong>Velocity:</strong> (${entity.velocity_x.toFixed(3)}, ${entity.velocity_y.toFixed(3)}, ${entity.velocity_z.toFixed(3)})<br>
+                            <strong>Item:</strong> ID ${entity.item_id}, Count: ${entity.count}${debugHtml}
+                        </div>
+                    `;
+                    }).join('');
+                }
+                
+                // Update 3D visualization
+                await update3DVisualization(data);
+            } catch (error) {
+                // Only log if it's not an abort (timeout) or network error
+                if (error.name !== 'AbortError' && error.name !== 'TypeError') {
+                    console.error('Error fetching state:', error);
+                }
+                // Silently handle network errors - don't spam console
+                const indicator = document.getElementById('statusIndicator');
+                const statusText = document.getElementById('statusText');
+                if (indicator && statusText) {
+                    indicator.className = 'status-indicator inactive';
+                    statusText.textContent = 'Connection Error';
+                }
+            } finally {
+                isUpdating = false;
+            }
+        }
+        
+        let isPaused = false;
+        
+        async function pauseUpdates() {
+            try {
+                const response = await fetch('/api/pause', { method: 'POST' });
+                const data = await response.json();
+                if (data.status === 'paused') {
+                    isPaused = true;
+                    document.getElementById('pauseBtn').style.display = 'none';
+                    document.getElementById('resumeBtn').style.display = 'inline-block';
+                    document.getElementById('stepBtn').disabled = false;
+                }
+            } catch (error) {
+                console.error('Error pausing updates:', error);
+            }
+        }
+        
+        async function resumeUpdates() {
+            try {
+                const response = await fetch('/api/resume', { method: 'POST' });
+                const data = await response.json();
+                if (data.status === 'resumed') {
+                    isPaused = false;
+                    document.getElementById('pauseBtn').style.display = 'inline-block';
+                    document.getElementById('resumeBtn').style.display = 'none';
+                    document.getElementById('stepBtn').disabled = true;
+                }
+            } catch (error) {
+                console.error('Error resuming updates:', error);
+            }
+        }
+        
+        async function stepTick() {
+            if (!isPaused) {
+                console.log('Cannot step: not paused');
+                return;
+            }
+            try {
+                console.log('Stepping tick...');
+                const response = await fetch('/api/step', { method: 'POST' });
+                const data = await response.json();
+                console.log('Step response:', data);
+                if (data.status === 'stepped') {
+                    // Immediately update the visualization to show the new state
+                    console.log('Updating visualization after step...');
+                    await updateStatus();
+                    console.log('Visualization updated');
+                } else {
+                    console.error('Step failed:', data);
+                }
+            } catch (error) {
+                console.error('Error stepping tick:', error);
+            }
+        }
+        
+        async function update3DVisualization(data) {
+            if (!scene) return;
+            
+            // Update player objects
+            const currentPlayerIds = new Set(data.players.map(p => p.uuid));
+            
+            // Remove players that no longer exist
+            for (const [uuid, obj] of playerObjects.entries()) {
+                if (!currentPlayerIds.has(uuid)) {
+                    scene.remove(obj);
+                    playerObjects.delete(uuid);
+                }
+            }
+            
+            // Add/update players
+            data.players.forEach(player => {
+                if (!playerObjects.has(player.uuid)) {
+                    // Create a group to hold all player visualization elements
+                    const playerGroup = new THREE.Group();
+                    
+                    // Player body hitbox wireframe (0.6 x 1.2 x 0.6 blocks - body only, head separate)
+                    // Body extends from y=0 to y=1.2, then head is 0.6 tall centered at y=1.5 (from 1.2 to 1.8)
+                    const bodyGeometry = new THREE.BoxGeometry(0.6, 1.2, 0.6);
+                    const bodyEdges = new THREE.EdgesGeometry(bodyGeometry);
+                    const bodyMaterial = new THREE.LineBasicMaterial({ color: 0x4CAF50, linewidth: 2 });
+                    const playerHitbox = new THREE.LineSegments(bodyEdges, bodyMaterial);
+                    // Position at player's feet, center at y=0.6 (half of 1.2)
+                    playerHitbox.position.set(0, 0.6, 0);  // Relative to group
+                    playerGroup.add(playerHitbox);
+                    
+                    // Head group - contains head and eye level ring, rotates together
+                    const headGroup = new THREE.Group();
+                    headGroup.position.set(0, 1.5, 0);  // Head center at y=1.5
+                    
+                    // Head wireframe (0.6 x 0.6 x 0.6 blocks)
+                    // The head cube's front face should point along -Z axis initially (when yaw=0, pitch=0)
+                    const headGeometry = new THREE.BoxGeometry(0.6, 0.6, 0.6);
+                    const headEdges = new THREE.EdgesGeometry(headGeometry);
+                    const headMaterial = new THREE.LineBasicMaterial({ color: 0x81C784, linewidth: 2 });
+                    const headHitbox = new THREE.LineSegments(headEdges, headMaterial);
+                    // No initial rotation - front face is along -Z by default
+                    headGroup.add(headHitbox);
+                    
+                    // Eye level indicator (square ring wrapped around head horizontally)
+                    // Create a square ring that wraps around the head (slightly larger than head)
+                    // The square should be in XY plane (vertical, facing forward/back) so its normal points along Z
+                    // When head rotates, normal will point up when looking at horizon
+                    const eyeLevelSize = 0.35;  // Slightly larger than head radius (0.3) to wrap around
+                    const eyeLevelPoints = [
+                        new THREE.Vector3(-eyeLevelSize, -eyeLevelSize, 0),
+                        new THREE.Vector3(eyeLevelSize, -eyeLevelSize, 0),
+                        new THREE.Vector3(eyeLevelSize, eyeLevelSize, 0),
+                        new THREE.Vector3(-eyeLevelSize, eyeLevelSize, 0),
+                        new THREE.Vector3(-eyeLevelSize, -eyeLevelSize, 0)  // Close the loop
+                    ];
+                    const eyeLevelGeometry = new THREE.BufferGeometry().setFromPoints(eyeLevelPoints);
+                    const eyeLevelMaterial = new THREE.LineBasicMaterial({ color: 0x00FF00, linewidth: 2 });
+                    const eyeLevelRing = new THREE.Line(eyeLevelGeometry, eyeLevelMaterial);
+                    // Position at eye level relative to head center (1.62 - 1.5 = 0.12 above head center)
+                    eyeLevelRing.position.set(0, 0.12, 0);  // Eye level relative to head center
+                    // Rotate 90 degrees around X axis to make it horizontal (normal points up)
+                    eyeLevelRing.rotation.x = Math.PI / 2;
+                    headGroup.add(eyeLevelRing);
+                    
+                    playerGroup.add(headGroup);
+                    
+                    // Look direction vector (arrow pointing where player is looking)
+                    const lookDirection = new THREE.Vector3();
+                    const yawRad = (player.yaw * Math.PI) / 180;
+                    const pitchRad = (player.pitch * Math.PI) / 180;
+                    
+                    // Calculate look direction (Minecraft: yaw 0 = south, 90 = west, 180 = north, 270 = east)
+                    lookDirection.x = -Math.sin(yawRad) * Math.cos(pitchRad);
+                    lookDirection.y = -Math.sin(pitchRad);
+                    lookDirection.z = Math.cos(yawRad) * Math.cos(pitchRad);
+                    lookDirection.normalize();
+                    
+                    // Create arrow helper (look direction vector)
+                    const arrowLength = 2.0;
+                    const arrowHelper = new THREE.ArrowHelper(
+                        lookDirection,
+                        new THREE.Vector3(0, 0, 0),  // Origin relative to group (will position at eye level)
+                        arrowLength,
+                        0x00FF00,
+                        arrowLength * 0.2,  // Arrow head length
+                        arrowLength * 0.1   // Arrow head width
+                    );
+                    arrowHelper.position.set(0, 1.62, 0);  // Position at eye level relative to group
+                    playerGroup.add(arrowHelper);
+                    
+                    // Position the entire group
+                    playerGroup.position.set(player.x, player.y, player.z);
+                    scene.add(playerGroup);
+                    playerObjects.set(player.uuid, playerGroup);
+                } else {
+                    // Update existing player position and rotation
+                    const playerGroup = playerObjects.get(player.uuid);
+                    playerGroup.position.set(player.x, player.y, player.z);
+                    
+                    // Update head rotation based on yaw and pitch
+                    // Find head group (it's at y=1.5 relative to playerGroup)
+                    const headGroup = playerGroup.children.find(child => 
+                        child instanceof THREE.Group && child.position.y === 1.5
+                    );
+                    if (headGroup) {
+                        const yawRad = (player.yaw * Math.PI) / 180;
+                        const pitchRad = (player.pitch * Math.PI) / 180;
+                        
+                        // Calculate look direction vector (same as arrow)
+                        const lookDirection = new THREE.Vector3();
+                        lookDirection.x = -Math.sin(yawRad) * Math.cos(pitchRad);
+                        lookDirection.y = -Math.sin(pitchRad);
+                        lookDirection.z = Math.cos(yawRad) * Math.cos(pitchRad);
+                        lookDirection.normalize();
+                        
+                        // The head's front face should point in the look direction
+                        // Use lookAt with a fixed up vector to prevent roll (cocking to the side)
+                        const targetPoint = new THREE.Vector3(0, 0, 0).add(lookDirection);
+                        const up = new THREE.Vector3(0, 1, 0);  // Fixed up vector to prevent roll
+                        
+                        // Create a matrix that looks at the target with fixed up
+                        const matrix = new THREE.Matrix4();
+                        matrix.lookAt(new THREE.Vector3(0, 0, 0), targetPoint, up);
+                        
+                        // Extract rotation from matrix and apply it
+                        headGroup.rotation.setFromRotationMatrix(matrix);
+                    }
+                    
+                    // Update look direction arrow
+                    const arrowHelper = playerGroup.children.find(child => child instanceof THREE.ArrowHelper);
+                    if (arrowHelper) {
+                        const yawRad = (player.yaw * Math.PI) / 180;
+                        const pitchRad = (player.pitch * Math.PI) / 180;
+                        const lookDirection = new THREE.Vector3();
+                        lookDirection.x = -Math.sin(yawRad) * Math.cos(pitchRad);
+                        lookDirection.y = -Math.sin(pitchRad);
+                        lookDirection.z = Math.cos(yawRad) * Math.cos(pitchRad);
+                        lookDirection.normalize();
+                        arrowHelper.setDirection(lookDirection);
+                    }
+                }
+            });
+            
+            // Update entity objects
+            const currentEntityIds = new Set(data.entities.map(e => e.id));
+            
+            // Track which blocks are being checked this frame
+            const blocksCheckedThisFrame = new Set();
+            const cachedBlocksThisFrame = new Set();
+            
+            // Remove entities that no longer exist
+            for (const [id, obj] of entityObjects.entries()) {
+                if (!currentEntityIds.has(id)) {
+                    if (obj.current) scene.remove(obj.current);
+                    if (obj.next) scene.remove(obj.next);
+                    if (obj.line) scene.remove(obj.line);
+                    if (obj.gravityArrow) scene.remove(obj.gravityArrow);
+                    entityObjects.delete(id);
+                }
+            }
+            
+            // Check intersections for all entities in parallel
+            const intersectionChecks = data.entities.map(async entity => {
+                // Ensure velocity properties exist (default to 0 if missing)
+                const vel_x = entity.velocity_x || 0;
+                const vel_y = entity.velocity_y || 0;
+                const vel_z = entity.velocity_z || 0;
+                const next_x = entity.x + vel_x * 1.0;
+                const next_y = entity.y + vel_y * 1.0;
+                const next_z = entity.z + vel_z * 1.0;
+                
+                try {
+                    const controller = new AbortController();
+                    const timeoutId = setTimeout(() => controller.abort(), 1000); // 1 second timeout
+                    
+                    const response = await fetch('/api/check_line_intersection', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            line_start: [entity.x, entity.y, entity.z],
+                            line_end: [next_x, next_y, next_z],
+                            debug: true  // Request debug info
+                        }),
+                        signal: controller.signal
+                    });
+                    clearTimeout(timeoutId);
+                    
+                    if (response.ok) {
+                        const result = await response.json();
+                        return { 
+                            id: entity.id, 
+                            intersects: result.intersects || false,
+                            debug: result.debug || null
+                        };
+                    }
+                    return { id: entity.id, intersects: false, debug: null };
+                } catch (error) {
+                    // Silently handle network errors - don't spam console
+                    if (error.name !== 'AbortError' && error.name !== 'TypeError') {
+                        console.error('Error checking line intersection:', error);
+                    }
+                    return { id: entity.id, intersects: false, debug: null };
+                }
+            });
+            
+            // Wait for all intersection checks to complete
+            const intersectionResults = await Promise.all(intersectionChecks);
+            const intersectionMap = new Map(intersectionResults.map(r => [r.id, r.intersects]));
+            const debugMap = new Map(intersectionResults.map(r => [r.id, r.debug]));
+            
+            // Add/update entities
+            data.entities.forEach(entity => {
+                // Ensure velocity properties exist (default to 0 if missing)
+                const vel_x = entity.velocity_x || 0;
+                const vel_y = entity.velocity_y || 0;
+                const vel_z = entity.velocity_z || 0;
+                // Calculate next position
+                const next_x = entity.x + vel_x * 1.0;
+                const next_y = entity.y + vel_y * 1.0;
+                const next_z = entity.z + vel_z * 1.0;
+                
+                const lineIntersects = intersectionMap.get(entity.id) || false;
+                const debugInfo = debugMap.get(entity.id);
+                
+                // Visualize cached blocks for this entity (if using cache)
+                if (entity.cached_blocks && entity.cached_blocks.length > 0) {
+                    entity.cached_blocks.forEach(blockPos => {
+                        const blockKey = `${blockPos[0]},${blockPos[1]},${blockPos[2]}`;
+                        cachedBlocksThisFrame.add(blockKey);
+                        
+                        if (!cachedBlocks.has(blockKey)) {
+                            // Create wireframe box for cached block (different color)
+                            const blockGeometry = new THREE.BoxGeometry(1.0, 1.0, 1.0);
+                            const blockEdges = new THREE.EdgesGeometry(blockGeometry);
+                            const blockMaterial = new THREE.LineBasicMaterial({ 
+                                color: 0x0088FF,  // Blue for cached blocks
+                                linewidth: 1,
+                                transparent: true,
+                                opacity: 0.4
+                            });
+                            const blockWireframe = new THREE.LineSegments(blockEdges, blockMaterial);
+                            blockWireframe.position.set(blockPos[0] + 0.5, blockPos[1] + 0.5, blockPos[2] + 0.5);
+                            scene.add(blockWireframe);
+                            
+                            // Create text label for cached block
+                            const canvas = document.createElement('canvas');
+                            const context = canvas.getContext('2d');
+                            canvas.width = 256;
+                            canvas.height = 128;
+                            context.fillStyle = 'rgba(0, 136, 255, 0.7)';
+                            context.fillRect(0, 0, canvas.width, canvas.height);
+                            context.fillStyle = '#ffffff';
+                            context.font = 'Bold 24px Arial';
+                            context.textAlign = 'center';
+                            context.textBaseline = 'middle';
+                            const labelText = `${blockPos[0]}, ${blockPos[1]}, ${blockPos[2]}`;
+                            context.fillText(labelText, canvas.width / 2, canvas.height / 2);
+                            context.fillText('(cached)', canvas.width / 2, canvas.height / 2 + 20);
+                            
+                            const texture = new THREE.CanvasTexture(canvas);
+                            texture.needsUpdate = true;
+                            const spriteMaterial = new THREE.SpriteMaterial({ 
+                                map: texture,
+                                transparent: true,
+                                alphaTest: 0.1
+                            });
+                            const sprite = new THREE.Sprite(spriteMaterial);
+                            sprite.scale.set(1, 0.5, 1);
+                            sprite.position.set(blockPos[0] + 0.5, blockPos[1] + 0.5, blockPos[2] + 0.5);
+                            scene.add(sprite);
+                            
+                            cachedBlocks.set(blockKey, { wireframe: blockWireframe, label: sprite });
+                        }
+                    });
+                }
+                
+                // Visualize blocks being checked for this entity
+                if (debugInfo && debugInfo.blocks_checked) {
+                    debugInfo.blocks_checked.forEach(block => {
+                        const blockKey = `${block.pos[0]},${block.pos[1]},${block.pos[2]}`;
+                        blocksCheckedThisFrame.add(blockKey);
+                        
+                        if (!checkedBlocks.has(blockKey)) {
+                            // Create wireframe box for this block
+                            const blockGeometry = new THREE.BoxGeometry(1.0, 1.0, 1.0);
+                            const blockEdges = new THREE.EdgesGeometry(blockGeometry);
+                            const blockMaterial = new THREE.LineBasicMaterial({ 
+                                color: block.is_solid ? (block.intersects ? 0x00FF00 : 0xFFAA00) : 0x666666,
+                                linewidth: 2,
+                                transparent: true,
+                                opacity: 0.7
+                            });
+                            const blockWireframe = new THREE.LineSegments(blockEdges, blockMaterial);
+                            blockWireframe.position.set(block.pos[0] + 0.5, block.pos[1] + 0.5, block.pos[2] + 0.5);
+                            scene.add(blockWireframe);
+                            
+                            // Create text label for block coordinates
+                            const canvas = document.createElement('canvas');
+                            const context = canvas.getContext('2d');
+                            canvas.width = 256;
+                            canvas.height = 128;
+                            context.fillStyle = 'rgba(0, 0, 0, 0.7)';
+                            context.fillRect(0, 0, canvas.width, canvas.height);
+                            context.fillStyle = '#ffffff';
+                            context.font = 'Bold 32px Arial';
+                            context.textAlign = 'center';
+                            context.textBaseline = 'middle';
+                            const labelText = `${block.pos[0]}, ${block.pos[1]}, ${block.pos[2]}`;
+                            context.fillText(labelText, canvas.width / 2, canvas.height / 2);
+                            
+                            const texture = new THREE.CanvasTexture(canvas);
+                            texture.needsUpdate = true;
+                            const spriteMaterial = new THREE.SpriteMaterial({ 
+                                map: texture,
+                                transparent: true,
+                                alphaTest: 0.1
+                            });
+                            const sprite = new THREE.Sprite(spriteMaterial);
+                            sprite.scale.set(1, 0.5, 1);
+                            sprite.position.set(block.pos[0] + 0.5, block.pos[1] + 0.5, block.pos[2] + 0.5);
+                            scene.add(sprite);
+                            
+                            checkedBlocks.set(blockKey, { wireframe: blockWireframe, label: sprite });
+                        } else {
+                            // Update existing block visualization
+                            const blockObj = checkedBlocks.get(blockKey);
+                            if (block.is_solid) {
+                                blockObj.wireframe.material.color.setHex(block.intersects ? 0x00FF00 : 0xFFAA00);
+                            } else {
+                                blockObj.wireframe.material.color.setHex(0x666666);
+                            }
+                        }
+                    });
+                }
+                
+                if (!entityObjects.has(entity.id)) {
+                    // Create current position visualization (item entity hitbox wireframe)
+                    const geometry = new THREE.BoxGeometry(0.25, 0.25, 0.25);
+                    const edges = new THREE.EdgesGeometry(geometry);
+                    const currentMaterial = new THREE.LineBasicMaterial({ color: 0xFFD700, linewidth: 2 });
+                    const currentHitbox = new THREE.LineSegments(edges, currentMaterial);
+                    currentHitbox.position.set(entity.x, entity.y, entity.z);
+                    scene.add(currentHitbox);
+                    
+                    // Create gravity vector arrow (downward)
+                    const gravityDirection = new THREE.Vector3(0, -1, 0);
+                    const gravityLength = 0.5;
+                    const gravityColor = entity.gravity_disabled ? 0x888888 : 0xFF0000;  // Gray if disabled, red if enabled
+                    const gravityArrow = new THREE.ArrowHelper(
+                        gravityDirection,
+                        new THREE.Vector3(0, 0, 0),
+                        gravityLength,
+                        gravityColor,
+                        0.1,
+                        0.05
+                    );
+                    gravityArrow.position.set(entity.x, entity.y, entity.z);
+                    scene.add(gravityArrow);
+                    
+                    // Create next position visualization (smaller, transparent)
+                    const nextGeometry = new THREE.BoxGeometry(0.15, 0.15, 0.15);
+                    const nextEdges = new THREE.EdgesGeometry(nextGeometry);
+                    const nextMaterial = new THREE.LineBasicMaterial({ 
+                        color: 0x888888, 
+                        linewidth: 1,
+                        transparent: true,
+                        opacity: 0.6
+                    });
+                    const nextHitbox = new THREE.LineSegments(nextEdges, nextMaterial);
+                    nextHitbox.position.set(next_x, next_y, next_z);
+                    scene.add(nextHitbox);
+                    
+                    // Create line between current and next position
+                    const lineGeometry = new THREE.BufferGeometry().setFromPoints([
+                        new THREE.Vector3(entity.x, entity.y, entity.z),
+                        new THREE.Vector3(next_x, next_y, next_z)
+                    ]);
+                    const lineMaterial = new THREE.LineBasicMaterial({ 
+                        color: lineIntersects ? 0x00FF00 : 0xFFFFFF,
+                        linewidth: 2
+                    });
+                    const line = new THREE.Line(lineGeometry, lineMaterial);
+                    scene.add(line);
+                    
+                    entityObjects.set(entity.id, { 
+                        current: currentHitbox, 
+                        next: nextHitbox, 
+                        line: line,
+                        gravityArrow: gravityArrow
+                    });
+                } else {
+                    // Update existing entity visualizations
+                    const obj = entityObjects.get(entity.id);
+                    
+                    // Update current position
+                    obj.current.position.set(entity.x, entity.y, entity.z);
+                    
+                    // Update next position
+                    obj.next.position.set(next_x, next_y, next_z);
+                    
+                    // Update line
+                    obj.line.geometry.setFromPoints([
+                        new THREE.Vector3(entity.x, entity.y, entity.z),
+                        new THREE.Vector3(next_x, next_y, next_z)
+                    ]);
+                    obj.line.material.color.setHex(lineIntersects ? 0x00FF00 : 0xFFFFFF);
+                    
+                    // Update gravity arrow
+                    if (obj.gravityArrow) {
+                        obj.gravityArrow.position.set(entity.x, entity.y, entity.z);
+                        // Update color based on gravity disabled state
+                        const gravityColor = entity.gravity_disabled ? 0x888888 : 0xFF0000;
+                        obj.gravityArrow.setColor(gravityColor);
+                    } else {
+                        // Create gravity arrow if it doesn't exist
+                        const gravityDirection = new THREE.Vector3(0, -1, 0);
+                        const gravityLength = 0.5;
+                        const gravityColor = entity.gravity_disabled ? 0x888888 : 0xFF0000;
+                        const gravityArrow = new THREE.ArrowHelper(
+                            gravityDirection,
+                            new THREE.Vector3(0, 0, 0),
+                            gravityLength,
+                            gravityColor,
+                            0.1,
+                            0.05
+                        );
+                        gravityArrow.position.set(entity.x, entity.y, entity.z);
+                        scene.add(gravityArrow);
+                        obj.gravityArrow = gravityArrow;
+                    }
+                }
+            });
+            
+            // Remove blocks that are no longer being checked
+            for (const [blockKey, blockObj] of checkedBlocks.entries()) {
+                if (!blocksCheckedThisFrame.has(blockKey)) {
+                    scene.remove(blockObj.wireframe);
+                    scene.remove(blockObj.label);
+                    checkedBlocks.delete(blockKey);
+                }
+            }
+            
+            // Remove cached blocks that are no longer cached
+            for (const [blockKey, blockObj] of cachedBlocks.entries()) {
+                if (!cachedBlocksThisFrame.has(blockKey)) {
+                    scene.remove(blockObj.wireframe);
+                    scene.remove(blockObj.label);
+                    cachedBlocks.delete(blockKey);
+                }
+            }
+        }
+        
+        // Height map visualization
+        async function updateHeightMapVisualization() {
+            if (!scene) return;
+            
+            // Get player position to center the visualization
+            let playerX = 0;
+            let playerZ = 0;
+            try {
+                const stateResponse = await fetch('/api/state', { signal: AbortSignal.timeout(2000) });
+                if (stateResponse.ok) {
+                    const stateData = await stateResponse.json();
+                    if (stateData.players && stateData.players.length > 0) {
+                        playerX = stateData.players[0].x;
+                        playerZ = stateData.players[0].z;
+                    }
+                }
+            } catch (error) {
+                // Use default (0, 0) if we can't get player position
+            }
+            
+            // Calculate which chunks are within 16 block radius
+            const radius = 16;
+            const playerChunkX = Math.floor(playerX / 16);
+            const playerChunkZ = Math.floor(playerZ / 16);
+            
+            // Get chunks within radius (chunk is 16x16, so radius of 16 blocks = 1 chunk in each direction)
+            const chunksToLoad = [];
+            const chunkRadius = Math.ceil(radius / 16) + 1; // Add 1 for safety
+            
+            for (let cx = playerChunkX - chunkRadius; cx <= playerChunkX + chunkRadius; cx++) {
+                for (let cz = playerChunkZ - chunkRadius; cz <= playerChunkZ + chunkRadius; cz++) {
+                    // Check if chunk center is within radius
+                    const chunkCenterX = cx * 16 + 8;
+                    const chunkCenterZ = cz * 16 + 8;
+                    const dx = chunkCenterX - playerX;
+                    const dz = chunkCenterZ - playerZ;
+                    const distance = Math.sqrt(dx * dx + dz * dz);
+                    
+                    if (distance <= radius) {
+                        chunksToLoad.push({x: cx, z: cz});
+                    }
+                }
+            }
+            
+            // Remove chunks that are no longer within radius
+            const chunksToKeep = new Set(chunksToLoad.map(c => `${c.x},${c.z}`));
+            for (const [chunkKey, oldGroup] of heightMapObjects.entries()) {
+                if (!chunksToKeep.has(chunkKey)) {
+                    oldGroup.children.forEach(child => {
+                        if (child.geometry) child.geometry.dispose();
+                        if (child.material) child.material.dispose();
+                    });
+                    scene.remove(oldGroup);
+                    heightMapObjects.delete(chunkKey);
+                }
+            }
+            
+            for (const chunk of chunksToLoad) {
+                const chunkKey = `${chunk.x},${chunk.z}`;
+                
+                // Skip if we already have this chunk loaded
+                if (heightMapObjects.has(chunkKey)) continue;
+                
+                try {
+                    const response = await fetch(`/api/heightmap?chunk_x=${chunk.x}&chunk_z=${chunk.z}`);
+                    if (!response.ok) continue;
+                    
+                    const data = await response.json();
+                    if (!data.use_terrain || !data.height_map_2d) continue;
+                    
+                    // Create group for this chunk's height map
+                    const heightMapGroup = new THREE.Group();
+                    const heightMap = data.height_map_2d;
+                    
+                    // Render simple squares at height map height with number inside
+                    for (let z = 0; z < 16; z++) {
+                        for (let x = 0; x < 16; x++) {
+                            const height = heightMap[z][x];
+                            const worldX = chunk.x * 16 + x;
+                            const worldZ = chunk.z * 16 + z;
+                            
+                            // Create a square plane at the height
+                            const planeGeometry = new THREE.PlaneGeometry(0.9, 0.9);
+                            const planeMaterial = new THREE.MeshBasicMaterial({ 
+                                color: 0xffff00,
+                                side: THREE.DoubleSide,
+                                transparent: true,
+                                opacity: 0.7
+                            });
+                            const plane = new THREE.Mesh(planeGeometry, planeMaterial);
+                            plane.position.set(worldX + 0.5, height, worldZ + 0.5);
+                            plane.rotation.x = -Math.PI / 2; // Horizontal plane
+                            heightMapGroup.add(plane);
+                            
+                            // Add text label showing height value
+                            const canvas = document.createElement('canvas');
+                            const context = canvas.getContext('2d');
+                            canvas.width = 64;
+                            canvas.height = 64;
+                            context.fillStyle = 'rgba(0, 0, 0, 0.8)';
+                            context.fillRect(0, 0, canvas.width, canvas.height);
+                            context.fillStyle = '#ffffff';
+                            context.font = 'bold 24px Arial';
+                            context.textAlign = 'center';
+                            context.textBaseline = 'middle';
+                            context.fillText(height.toString(), canvas.width / 2, canvas.height / 2);
+                            
+                            const texture = new THREE.CanvasTexture(canvas);
+                            const spriteMaterial = new THREE.SpriteMaterial({ map: texture });
+                            const sprite = new THREE.Sprite(spriteMaterial);
+                            sprite.scale.set(0.8, 0.8, 1);
+                            sprite.position.set(worldX + 0.5, height + 0.01, worldZ + 0.5);
+                            heightMapGroup.add(sprite);
+                        }
+                    }
+                    
+                    scene.add(heightMapGroup);
+                    heightMapObjects.set(chunkKey, heightMapGroup);
+                } catch (error) {
+                    // Silently ignore errors (chunk might not be loaded)
+                }
+            }
+        }
+        
+        // Initialize 3D scene when page loads
+        window.addEventListener('load', () => {
+            init3D();
+            updateStatus();
+            updateHeightMapVisualization();
+            // Update much faster for smoother visualization (every 50ms = 20fps)
+            // Store interval ID so we can clear it if needed
+            // Note: Web view updates continue even when ticks are paused
+            updateInterval = setInterval(() => {
+                updateStatus();
+            }, 50);
+            
+            // Update height map visualization every 2 seconds (less frequent)
+            setInterval(() => {
+                updateHeightMapVisualization();
+            }, 2000);
+        });
+    </script>
+</body>
+</html>

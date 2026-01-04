@@ -8,8 +8,11 @@ import struct
 import uuid
 import zlib
 from enum import IntEnum
-from typing import Optional, Tuple, List, Dict, Any
+from typing import Optional, Tuple, List, Dict, Any, TYPE_CHECKING
 from dataclasses import dataclass
+
+if TYPE_CHECKING:
+    from .block_manager import BlockManager
 
 
 class ConnectionState(IntEnum):
@@ -1547,25 +1550,22 @@ class PacketBuilder:
     
     @staticmethod
     def build_chunk_data(
-        chunk_x: int = 0,
-        chunk_z: int = 0,
-        flat_world: bool = True,
-        ground_y: int = 64
+        chunk_x: int,
+        chunk_z: int,
+        block_manager: 'BlockManager'
     ) -> bytes:
         """
         Build a Chunk Data and Update Light packet (PLAY state).
         
+        Phase 3: Now requires BlockManager - single source of truth for block data.
+        
         Args:
             chunk_x: Chunk X coordinate
             chunk_z: Chunk Z coordinate
-            flat_world: If True, generate flat world (stone at y=63, grass at y=64)
-            ground_y: Y coordinate of ground level (default 64)
+            block_manager: BlockManager instance to read block data from
         """
-        # Block state IDs (may need adjustment based on version)
-        # These are approximate values for 1.21.10
-        BLOCK_AIR = 0
-        BLOCK_STONE = 1
-        BLOCK_GRASS_BLOCK = 9  # May need adjustment
+        # Phase 3: Block state IDs no longer needed here (BlockManager handles them)
+        # Keeping for reference if needed elsewhere
         
         packet_writer = ProtocolWriter()
         packet_writer.write_varint(0x2C)  # Chunk Data and Update Light packet ID
@@ -1575,48 +1575,58 @@ class PacketBuilder:
         packet_writer.write_int(chunk_z)
         
         # Heightmaps: Generate MOTION_BLOCKING heightmap
-        # For flat world at y=64, all columns have height 64
+        # Calculate heightmap from BlockManager/terrain generator data
         # Heightmap format: Prefixed Array of Heightmap
         # Each heightmap: Type (VarInt) + Data (Prefixed Array of Long)
         # Bits per entry = ceil(log2(world_height + 1))
         # Overworld: -64 to 320 = 384 blocks, so bits_per_entry = ceil(log2(385)) = 9
-        if flat_world:
-            # Send MOTION_BLOCKING heightmap (Type = 4)
-            packet_writer.write_varint(1)  # Number of heightmaps
-            
-            # Heightmap Type: MOTION_BLOCKING = 4
-            packet_writer.write_varint(4)
-            
-            # Heightmap Data: 256 entries (16x16 columns), all set to ground_y
-            # Packed into longs using 9 bits per entry
-            # Ordering: x increases fastest, then z (same as block data ordering)
-            heightmap_bits_per_entry = 9
-            heightmap_entries = []
+        
+        # Check if terrain generation is enabled
+        use_terrain = (block_manager.terrain_generator is not None)
+        
+        # Send MOTION_BLOCKING heightmap (Type = 4)
+        packet_writer.write_varint(1)  # Number of heightmaps
+        
+        # Heightmap Type: MOTION_BLOCKING = 4
+        packet_writer.write_varint(4)
+        
+        # Heightmap Data: 256 entries (16x16 columns)
+        # Packed into longs using 9 bits per entry
+        # Ordering: x increases fastest, then z (same as block data ordering)
+        heightmap_bits_per_entry = 9
+        heightmap_entries = []
+        
+        if use_terrain:
+            # Use terrain generator's height map
+            height_map = block_manager.terrain_generator.generate_height_map(chunk_x, chunk_z)
             for z in range(16):
                 for x in range(16):
-                    heightmap_entries.append(ground_y)  # All columns at ground level
-            
-            # Pack into longs (same format as Data Array)
-            entries_per_long = 64 // heightmap_bits_per_entry  # 7 entries per long
-            num_longs = (256 + entries_per_long - 1) // entries_per_long
-            
-            # Write length (number of longs)
-            packet_writer.write_varint(num_longs)
-            
-            # Pack heightmap data
-            for long_idx in range(num_longs):
-                long_value = 0
-                for entry_idx in range(entries_per_long):
-                    data_idx = long_idx * entries_per_long + entry_idx
-                    if data_idx < 256:
-                        entry_value = heightmap_entries[data_idx]
-                        bit_offset = entry_idx * heightmap_bits_per_entry
-                        entry_value &= (1 << heightmap_bits_per_entry) - 1
-                        long_value |= (entry_value << bit_offset)
-                packet_writer.write_long(long_value)
+                    heightmap_entries.append(height_map[z][x])
         else:
-            # No heightmaps
-            packet_writer.write_varint(0)
+            # Flat world: all columns at ground level (y=64)
+            ground_y = 64
+            for z in range(16):
+                for x in range(16):
+                    heightmap_entries.append(ground_y)
+        
+        # Pack into longs (same format as Data Array)
+        entries_per_long = 64 // heightmap_bits_per_entry  # 7 entries per long
+        num_longs = (256 + entries_per_long - 1) // entries_per_long
+        
+        # Write length (number of longs)
+        packet_writer.write_varint(num_longs)
+        
+        # Pack heightmap data
+        for long_idx in range(num_longs):
+            long_value = 0
+            for entry_idx in range(entries_per_long):
+                data_idx = long_idx * entries_per_long + entry_idx
+                if data_idx < 256:
+                    entry_value = heightmap_entries[data_idx]
+                    bit_offset = entry_idx * heightmap_bits_per_entry
+                    entry_value &= (1 << heightmap_bits_per_entry) - 1
+                    long_value |= (entry_value << bit_offset)
+            packet_writer.write_long(long_value)
         
         # Generate chunk sections
         chunk_data_writer = ProtocolWriter()
@@ -1636,63 +1646,32 @@ class PacketBuilder:
             section_y_min = -64 + (section_idx * 16)
             section_y_max = section_y_min + 15
             
-            # Generate block data for this section
-            if flat_world and section_y_min <= ground_y <= section_y_max:
-                # This section contains ground
-                # Generate blocks: stone at y=63, grass at y=64
-                block_data = [BLOCK_AIR] * 4096  # 16x16x16 = 4096 blocks
-                block_count = 0
+            # Phase 3: Use BlockManager (required) - single source of truth
+            block_count, palette, palette_indices = \
+                block_manager.get_chunk_section_for_protocol(chunk_x, chunk_z, section_idx)
+            
+            # Write block count
+            chunk_data_writer.write_short(block_count)
+            
+            # Determine bits per entry based on palette size
+            if len(palette) == 1:
+                # Single-value palette (0 bits per entry)
+                chunk_data_writer.write_byte(0)
+                chunk_data_writer.write_varint(palette[0])
+            else:
+                # Multiple values - use indirect palette
+                # Calculate bits per entry (need at least ceil(log2(palette_size)))
+                bits_per_entry = max(4, (len(palette) - 1).bit_length())
+                if bits_per_entry > 8:
+                    bits_per_entry = 8  # Cap at 8 bits
                 
-                # Fill section with blocks
-                for y in range(16):
-                    world_y = section_y_min + y
-                    if world_y == ground_y - 1:  # Stone layer (y=63)
-                        # Fill entire layer with stone
-                        for z in range(16):
-                            for x in range(16):
-                                idx = y * 256 + z * 16 + x
-                                block_data[idx] = BLOCK_STONE
-                                block_count += 1
-                    elif world_y == ground_y:  # Grass layer (y=64)
-                        # Fill entire layer with grass
-                        for z in range(16):
-                            for x in range(16):
-                                idx = y * 256 + z * 16 + x
-                                block_data[idx] = BLOCK_GRASS_BLOCK
-                                block_count += 1
-                
-                # Create palette (air, stone, grass)
-                palette = [BLOCK_AIR, BLOCK_STONE, BLOCK_GRASS_BLOCK]
-                
-                # Map block_data to palette indices
-                palette_indices = []
-                for block_id in block_data:
-                    palette_indices.append(palette.index(block_id))
-                
-                # Write block count
-                chunk_data_writer.write_short(block_count)
-                
-                # Write block states PalettedContainer (Indirect, 4 bits per entry)
+                # Write block states PalettedContainer (Indirect)
                 PacketBuilder._write_paletted_container_indirect(
                     chunk_data_writer,
-                    bits_per_entry=4,  # 4 bits = up to 16 palette entries
+                    bits_per_entry=bits_per_entry,
                     palette=palette,
                     data_array=palette_indices
                 )
-            elif flat_world and section_y_min < ground_y - 1:
-                # Section below ground - fill with stone
-                block_data = [BLOCK_STONE] * 4096
-                block_count = 4096
-                
-                # Single-value palette (all stone)
-                chunk_data_writer.write_short(block_count)
-                chunk_data_writer.write_byte(0)  # 0 bits per entry
-                chunk_data_writer.write_varint(BLOCK_STONE)
-            else:
-                # Section is all air
-                chunk_data_writer.write_short(0)  # Block count = 0
-                chunk_data_writer.write_byte(0)  # 0 bits per entry (single value)
-                chunk_data_writer.write_varint(BLOCK_AIR)
             
             # Biomes: Single-value palette (plains = 0)
             chunk_data_writer.write_byte(0)  # 0 bits per entry
@@ -1718,8 +1697,23 @@ class PacketBuilder:
         sky_light_mask_bits = [False] * num_light_bits
         sky_light_sections = []  # Track which sections we're sending data for
         
-        if flat_world:
-            # Sections that need sky light: from ground section upward
+        if use_terrain:
+            # For terrain: sections that need sky light include those with exposed blocks
+            # We need to send light data for sections from min height to max height (and above)
+            # because blocks in valleys (at min height) are still exposed to sky
+            min_height = min(heightmap_entries) if heightmap_entries else 64
+            max_height = max(heightmap_entries) if heightmap_entries else 64
+            # Start from section containing minimum height (valleys need sky light too)
+            min_section = (min_height + 64) // 16  # Section containing min height
+            for section_idx in range(min_section, num_sections):
+                # Bit index: section_idx + 1 (because bit 0 is for section below world)
+                bit_idx = section_idx + 1
+                if bit_idx < num_light_bits:
+                    sky_light_mask_bits[bit_idx] = True
+                    sky_light_sections.append(section_idx)
+        else:
+            # Flat world: sections that need sky light: from ground section upward
+            ground_y = 64
             ground_section = (ground_y + 64) // 16  # Section containing ground_y
             for section_idx in range(ground_section, num_sections):
                 # Bit index: section_idx + 1 (because bit 0 is for section below world)
@@ -1735,9 +1729,25 @@ class PacketBuilder:
         packet_writer.write_bitset([False] * num_light_bits)
         
         # Empty Sky Light Mask: Sections that have all-zero sky light
-        # For our flat world, sections below ground have no sky light
+        # Only mark sections as empty if they're truly below all terrain (deep underground)
+        # Don't mark sections as empty just because they're below max height - 
+        # blocks in valleys might still be exposed to sky
         empty_sky_light_mask_bits = [False] * num_light_bits
-        if flat_world:
+        if use_terrain:
+            # For terrain: only mark sections as empty if they're well below the minimum height
+            # This ensures valleys and lower terrain still get proper sky light
+            min_height = min(heightmap_entries) if heightmap_entries else 64
+            # Only mark sections that are at least 16 blocks below the minimum height as empty
+            # This gives a buffer so we don't accidentally mark sections with exposed blocks
+            empty_threshold = min_height - 16
+            empty_section = (empty_threshold + 64) // 16
+            for section_idx in range(empty_section):
+                bit_idx = section_idx + 1
+                if bit_idx < num_light_bits:
+                    empty_sky_light_mask_bits[bit_idx] = True
+        else:
+            # Flat world: sections below ground have no sky light
+            ground_y = 64
             ground_section = (ground_y + 64) // 16
             for section_idx in range(ground_section):
                 bit_idx = section_idx + 1
@@ -1771,16 +1781,30 @@ class PacketBuilder:
                         byte_idx = block_idx // 2
                         is_high_nibble = (block_idx % 2) == 0
                         
-                        # Determine light value
-                        if flat_world:
+                        # Determine light value based on height map
+                        # Sky light propagates downward from surface, decreasing by 1 per block
+                        if use_terrain:
+                            # Get height at this (x, z) position from height map
+                            height_at_pos = heightmap_entries[z * 16 + x]
+                            if world_y >= height_at_pos:
+                                # Above or at surface: full sky light
+                                light_value = 15
+                            else:
+                                # Below surface: light decreases by 1 per block downward
+                                # Distance from surface
+                                distance_below = height_at_pos - world_y
+                                # Light level = 15 - distance, clamped to 0-15
+                                light_value = max(0, 15 - distance_below)
+                        else:
+                            # Flat world
+                            ground_y = 64
                             if world_y >= ground_y:
                                 # Above or at ground: full sky light
                                 light_value = 15
                             else:
-                                # Below ground: no sky light
-                                light_value = 0
-                        else:
-                            light_value = 15  # Default: full light
+                                # Below ground: light decreases by 1 per block downward
+                                distance_below = ground_y - world_y
+                                light_value = max(0, 15 - distance_below)
                         
                         # Pack into byte (high nibble first, then low nibble)
                         if is_high_nibble:
