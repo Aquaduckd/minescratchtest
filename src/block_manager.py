@@ -54,6 +54,9 @@ class BlockManager:
         self.BLOCK_DIRT = 2105  # Brown wool (for testing)
         self.BLOCK_GRASS_BLOCK = 2098  # Lime wool (for testing)
         self.BLOCK_STONE = 1
+        self.BLOCK_WHITE_WOOL = 2093  # White wool (snow)
+        self.BLOCK_YELLOW_WOOL = 2097  # Yellow wool (sand)
+        self.BLOCK_WATER = 86  # Water (full water block, level=0)
         
         # Terrain generator (optional, for terrain generation)
         self.terrain_generator: Optional[TerrainGenerator] = None
@@ -266,11 +269,19 @@ class BlockManager:
                         surface_height = height_map[z][x]
                         
                         if world_y > surface_height:
-                            # Above surface - air
-                            block_data[self._calculate_block_index(x, y, z)] = self.BLOCK_AIR
+                            # Above surface - air or water
+                            if world_y < 64:
+                                # Below sea level - fill with water
+                                block_data[self._calculate_block_index(x, y, z)] = self.BLOCK_WATER
+                            else:
+                                # Above sea level - air
+                                block_data[self._calculate_block_index(x, y, z)] = self.BLOCK_AIR
                         elif world_y == surface_height:
-                            # Surface - grass
-                            block_data[self._calculate_block_index(x, y, z)] = self.BLOCK_GRASS_BLOCK
+                            # Surface - determine block based on height and slope
+                            surface_block = self._get_surface_block(
+                                height_map, x, z, surface_height, chunk_x, chunk_z
+                            )
+                            block_data[self._calculate_block_index(x, y, z)] = surface_block
                         elif world_y >= surface_height - 3:
                             # Top 3 blocks below surface - dirt
                             block_data[self._calculate_block_index(x, y, z)] = self.BLOCK_DIRT
@@ -299,6 +310,55 @@ class BlockManager:
             block_data = [self.BLOCK_DIRT] * 4096
         
         return block_data
+    
+    def _get_surface_block(self, height_map: List[List[int]], x: int, z: int, 
+                           surface_height: int, chunk_x: int, chunk_z: int) -> int:
+        """
+        Determine the surface block type based on height and slope.
+        
+        Rules:
+        - Mountain peaks (high altitude): White wool (snow)
+        - Sea level and below: Yellow wool (sand)
+        - Gentle slopes: Lime wool (grass)
+        - Steep slopes: Brown wool (dirt)
+        
+        Args:
+            height_map: 16x16 height map for the chunk
+            x: Local X coordinate (0-15)
+            z: Local Z coordinate (0-15)
+            surface_height: Height at this position
+            chunk_x: Chunk X coordinate
+            chunk_z: Chunk Z coordinate
+            
+        Returns:
+            Block state ID for the surface block
+        """
+        # Sea level threshold (y=64)
+        sea_level = 64
+        snow_threshold = 90  # Mountains above this height get snow
+        steep_slope_threshold = 4  # Height difference for steep slope (increased to allow grass on steeper slopes)
+        
+        # Check height first
+        if surface_height >= snow_threshold:
+            # Mountain peaks - white wool (snow)
+            return self.BLOCK_WHITE_WOOL
+        elif surface_height <= sea_level:
+            # Sea level and below - yellow wool (sand)
+            return self.BLOCK_YELLOW_WOOL
+        
+        # For areas between sea level and snow: check slope
+        # Calculate slope directly from noise function to avoid chunk boundary artifacts
+        world_x = chunk_x * 16 + x + 0.5  # Use center of block for precision
+        world_z = chunk_z * 16 + z + 0.5
+        max_slope = self.terrain_generator.get_slope_at(world_x, world_z)
+        
+        # Determine block based on slope
+        if max_slope >= steep_slope_threshold:
+            # Steep slope - brown wool (dirt)
+            return self.BLOCK_DIRT
+        else:
+            # Gentle slope - lime wool (grass)
+            return self.BLOCK_GRASS_BLOCK
     
     def clear_updated_blocks(self) -> None:
         """

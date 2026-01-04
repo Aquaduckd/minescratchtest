@@ -243,4 +243,48 @@ class TerrainGenerator:
             local_z = 15 - ((-world_z - 1) % 16)
         
         return height_map[local_z][local_x]
+    
+    def get_slope_at(self, world_x: float, world_z: float) -> float:
+        """
+        Calculate the slope (steepness) at a world coordinate by computing
+        the gradient of the noise function.
+        
+        This avoids chunk boundary artifacts by using the continuous noise function
+        rather than discrete block heights.
+        
+        Args:
+            world_x: World X coordinate (can be float for precision)
+            world_z: World Z coordinate (can be float for precision)
+            
+        Returns:
+            Maximum slope value (height difference) in blocks
+        """
+        # Use a small offset to calculate gradient (1 block distance)
+        offset = 1.0
+        
+        # Get noise values at current position and neighbors
+        noise_x_plus = self._get_noise(world_x + offset, world_z)
+        noise_x_minus = self._get_noise(world_x - offset, world_z)
+        noise_z_plus = self._get_noise(world_x, world_z + offset)
+        noise_z_minus = self._get_noise(world_x, world_z - offset)
+        
+        # Calculate gradients in X and Z directions
+        # The difference in noise values over 2*offset distance, converted to height
+        # Get effective amplitude at this position (for mountain areas)
+        mountain_noise = self._get_mountain_noise(world_x, world_z)
+        if mountain_noise > self.mountain_threshold:
+            mountain_factor = (mountain_noise - self.mountain_threshold) / (1.0 - self.mountain_threshold)
+            effective_amplitude = self.amplitude + int(self.mountain_amplitude * mountain_factor)
+        else:
+            effective_amplitude = self.amplitude
+        
+        # Calculate height differences (noise difference * amplitude)
+        # Divide by 2*offset to get per-block gradient
+        gradient_x = abs((noise_x_plus - noise_x_minus) * effective_amplitude) / (2 * offset)
+        gradient_z = abs((noise_z_plus - noise_z_minus) * effective_amplitude) / (2 * offset)
+        
+        # Maximum slope is the larger of the two gradients
+        max_slope = max(gradient_x, gradient_z)
+        
+        return max_slope
 
