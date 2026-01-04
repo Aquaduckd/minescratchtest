@@ -1,0 +1,445 @@
+{
+  "minecraft:cat_variant": {
+    "minecraft:persian": {
+      "asset_id": "minecraft:entity/cat/persian",
+      "spawn_conditions": [
+        {
+          "priority": 0
+        }
+      ]
+    },
+    "minecraft:british_shorthair": {
+      "asset_id": "minecraft:entity/cat/british_shorthair",
+      "spawn_conditions": [
+        {
+          "priority": 0
+        }
+      ]
+    },
+    "minecraft:siamese": {
+      "asset_id": "minecraft:entity/cat/siamese",
+      "spawn_conditions": [
+        {
+          "priority": 0
+        }
+      ]
+    },
+    "minecraft:ragdoll": {
+      "asset_id": "minecraft:entity/cat/ragdoll",
+      "spawn_conditions": [
+        {
+          "priority": 0
+        }
+      ]
+    },
+    "minecraft:jellie": {
+      "asset_id": "minecraft:entity/cat/jellie",
+      "spawn_conditions": [
+        {
+          "priority": 0
+        }
+      ]
+    },
+    "minecraft:black": {
+      "asset_id": "minecraft:entity/cat/black",
+      "spawn_conditions": [
+        {
+          "priority": 0
+        }
+      ]
+    },
+    "minecraft:red": {
+      "asset_id": "minecraft:entity/cat/red",
+      "spawn_conditions": [
+        {
+          "priority": 0
+        }
+      ]
+    },
+    "minecraft:tabby": {
+      "asset_id": "minecraft:entity/cat/tabby",
+      "spawn_conditions": [
+        {
+          "priority": 0
+        }
+      ]
+    },
+    "minecraft:all_black": {
+      "asset_id": "minecraft:entity/cat/all_black",
+      "spawn_conditions": [
+        {
+          "condition": {
+            "type": "minecraft:structure",
+            "structures": "#minecraft:cats_spawn_as_black"
+          },
+          "priority": 1
+        },
+        {
+          "condition": {
+            "type": "minecraft:moon_brightness",
+            "range": {
+              "min": 0.9
+            }
+          },
+          "priority": 0
+        }
+      ]
+    },
+    "minecraft:calico": {
+      "asset_id": "minecraft:entity/cat/calico",
+      "spawn_conditions": [
+        {
+          "priority": 0
+        }
+      ]
+    },
+    "minecraft:white": {
+      "asset_id": "minecraft:entity/cat/white",
+      "spawn_conditions": [
+        {
+          "priority": 0
+        }
+      ]
+    }
+  },
+  "minecraft:chicken_variant": {
+    "minecraft:cold": {
+      "asset_id": "minecraft:entity/chicken/cold_chicken",
+      "model": "cold",
+      "spawn_conditions": [
+        {
+          "condition": {
+            "type": "minecraft:biome",
+            "biomes": "#minecraft:spawns_cold_variant_farm_animals"
+          },
+          "priority": 1
+        }
+      ]
+    },
+    "minecraft:temperate": {
+      "asset_id": "minecraft:entity/chicken/temperate_chicken",
+      "spawn_conditions": [
+        {
+          "priority": 0
+        }
+      ]
+    },
+    "minecraft:warm": {
+      "asset_id": "minecraft:entity/chicken/warm_chicken",
+      "spawn_conditions": [
+        {
+          "condition": {
+            "type": "minecraft:biome",
+            "biomes": "#minecraft:spawns_warm_variant_farm_animals"
+          },
+          "priority": 1
+        }
+      ]
+    }
+  },
+  "minecraft:cow_variant": {
+    "minecraft:cold": {
+      "asset_id": "minecraft:entity/cow/cold_cow",
+      "model": "cold",
+      "spawn_conditions": [
+        {
+          "condition": {
+            "type": "minecraft:biome",
+            "biomes": "#minecraft:spawns_cold_variant_farm_animals"
+          },
+          "priority": 1
+        }
+      ]
+    },
+    "minecraft:temperate": {
+      "asset_id": "minecraft:entity/cow/temperate_cow",
+      "spawn_conditions": [
+        {
+          "priority": 0
+        }
+      ]
+    },
+    "minecraft:warm": {
+      "asset_id": "minecraft:entity/cow/warm_cow",
+      "model": "warm",
+      "spawn_conditions": [
+        {
+          "condition": {
+            "type": "minecraft:biome",
+            "biomes": "#minecraft:spawns_warm_variant_farm_animals"
+          },
+          "priority": 1
+        }
+      ]
+    }
+  },
+  "minecraft:frog_variant": {
+    "minecraft:cold": {
+      "asset_id": "minecraft:entity/frog/cold_frog",
+      "spawn_conditions": [
+        {
+          "condition": {
+            "type": "minecraft:biome",
+            "biomes": "#minecraft:spawns_cold_variant_frogs"
+          },
+          "priority": 1
+        }
+      ]
+    },
+    "minecraft:temperate": {
+      "asset_id": "minecraft:entity/frog/temperate_frog",
+      "spawn_conditions": [
+        {
+          "priority": 0
+        }
+      ]
+    },
+    "minecraft:warm": {
+      "asset_id": "minecraft:entity/frog/warm_frog",
+      "spawn_conditions": [
+        {
+          "condition": {
+            "type": "minecraft:biome",
+            "biomes": "#minecraft:spawns_warm_variant_frogs"
+          },
+          "priority": 1
+        }
+      ]
+    }
+  },
+  "minecraft:pig_variant": {
+    "minecraft:cold": {
+      "asset_id": "minecraft:entity/pig/cold_pig",
+      "model": "cold",
+      "spawn_conditions": [
+        {
+          "condition": {
+            "type": "minecraft:biome",
+            "biomes": "#minecraft:spawns_cold_variant_farm_animals"
+          },
+          "priority": 1
+        }
+      ]
+    },
+    "minecraft:temperate": {
+      "asset_id": "minecraft:entity/pig/temperate_pig",
+      "spawn_conditions": [
+        {
+          "priority": 0
+        }
+      ]
+    },
+    "minecraft:warm": {
+      "asset_id": "minecraft:entity/pig/warm_pig",
+      "spawn_conditions": [
+        {
+          "condition": {
+            "type": "minecraft:biome",
+            "biomes": "#minecraft:spawns_warm_variant_farm_animals"
+          },
+          "priority": 1
+        }
+      ]
+    }
+  },
+  "minecraft:wolf_variant": {
+    "minecraft:striped": {
+      "assets": {
+        "angry": "minecraft:entity/wolf/wolf_striped_angry",
+        "tame": "minecraft:entity/wolf/wolf_striped_tame",
+        "wild": "minecraft:entity/wolf/wolf_striped"
+      },
+      "spawn_conditions": [
+        {
+          "condition": {
+            "type": "minecraft:biome",
+            "biomes": "#minecraft:is_badlands"
+          },
+          "priority": 1
+        }
+      ]
+    },
+    "minecraft:chestnut": {
+      "assets": {
+        "angry": "minecraft:entity/wolf/wolf_chestnut_angry",
+        "tame": "minecraft:entity/wolf/wolf_chestnut_tame",
+        "wild": "minecraft:entity/wolf/wolf_chestnut"
+      },
+      "spawn_conditions": [
+        {
+          "condition": {
+            "type": "minecraft:biome",
+            "biomes": "minecraft:old_growth_spruce_taiga"
+          },
+          "priority": 1
+        }
+      ]
+    },
+    "minecraft:rusty": {
+      "assets": {
+        "angry": "minecraft:entity/wolf/wolf_rusty_angry",
+        "tame": "minecraft:entity/wolf/wolf_rusty_tame",
+        "wild": "minecraft:entity/wolf/wolf_rusty"
+      },
+      "spawn_conditions": [
+        {
+          "condition": {
+            "type": "minecraft:biome",
+            "biomes": "#minecraft:is_jungle"
+          },
+          "priority": 1
+        }
+      ]
+    },
+    "minecraft:spotted": {
+      "assets": {
+        "angry": "minecraft:entity/wolf/wolf_spotted_angry",
+        "tame": "minecraft:entity/wolf/wolf_spotted_tame",
+        "wild": "minecraft:entity/wolf/wolf_spotted"
+      },
+      "spawn_conditions": [
+        {
+          "condition": {
+            "type": "minecraft:biome",
+            "biomes": "#minecraft:is_savanna"
+          },
+          "priority": 1
+        }
+      ]
+    },
+    "minecraft:snowy": {
+      "assets": {
+        "angry": "minecraft:entity/wolf/wolf_snowy_angry",
+        "tame": "minecraft:entity/wolf/wolf_snowy_tame",
+        "wild": "minecraft:entity/wolf/wolf_snowy"
+      },
+      "spawn_conditions": [
+        {
+          "condition": {
+            "type": "minecraft:biome",
+            "biomes": "minecraft:grove"
+          },
+          "priority": 1
+        }
+      ]
+    },
+    "minecraft:ashen": {
+      "assets": {
+        "angry": "minecraft:entity/wolf/wolf_ashen_angry",
+        "tame": "minecraft:entity/wolf/wolf_ashen_tame",
+        "wild": "minecraft:entity/wolf/wolf_ashen"
+      },
+      "spawn_conditions": [
+        {
+          "condition": {
+            "type": "minecraft:biome",
+            "biomes": "minecraft:snowy_taiga"
+          },
+          "priority": 1
+        }
+      ]
+    },
+    "minecraft:black": {
+      "assets": {
+        "angry": "minecraft:entity/wolf/wolf_black_angry",
+        "tame": "minecraft:entity/wolf/wolf_black_tame",
+        "wild": "minecraft:entity/wolf/wolf_black"
+      },
+      "spawn_conditions": [
+        {
+          "condition": {
+            "type": "minecraft:biome",
+            "biomes": "minecraft:old_growth_pine_taiga"
+          },
+          "priority": 1
+        }
+      ]
+    },
+    "minecraft:pale": {
+      "assets": {
+        "angry": "minecraft:entity/wolf/wolf_angry",
+        "tame": "minecraft:entity/wolf/wolf_tame",
+        "wild": "minecraft:entity/wolf/wolf"
+      },
+      "spawn_conditions": [
+        {
+          "priority": 0
+        }
+      ]
+    },
+    "minecraft:woods": {
+      "assets": {
+        "angry": "minecraft:entity/wolf/wolf_woods_angry",
+        "tame": "minecraft:entity/wolf/wolf_woods_tame",
+        "wild": "minecraft:entity/wolf/wolf_woods"
+      },
+      "spawn_conditions": [
+        {
+          "condition": {
+            "type": "minecraft:biome",
+            "biomes": "minecraft:forest"
+          },
+          "priority": 1
+        }
+      ]
+    }
+  },
+  "minecraft:wolf_sound_variant": {
+    "minecraft:big": {
+      "ambient_sound": "minecraft:entity.wolf_big.ambient",
+      "death_sound": "minecraft:entity.wolf_big.death",
+      "growl_sound": "minecraft:entity.wolf_big.growl",
+      "hurt_sound": "minecraft:entity.wolf_big.hurt",
+      "pant_sound": "minecraft:entity.wolf_big.pant",
+      "whine_sound": "minecraft:entity.wolf_big.whine"
+    },
+    "minecraft:puglin": {
+      "ambient_sound": "minecraft:entity.wolf_puglin.ambient",
+      "death_sound": "minecraft:entity.wolf_puglin.death",
+      "growl_sound": "minecraft:entity.wolf_puglin.growl",
+      "hurt_sound": "minecraft:entity.wolf_puglin.hurt",
+      "pant_sound": "minecraft:entity.wolf_puglin.pant",
+      "whine_sound": "minecraft:entity.wolf_puglin.whine"
+    },
+    "minecraft:sad": {
+      "ambient_sound": "minecraft:entity.wolf_sad.ambient",
+      "death_sound": "minecraft:entity.wolf_sad.death",
+      "growl_sound": "minecraft:entity.wolf_sad.growl",
+      "hurt_sound": "minecraft:entity.wolf_sad.hurt",
+      "pant_sound": "minecraft:entity.wolf_sad.pant",
+      "whine_sound": "minecraft:entity.wolf_sad.whine"
+    },
+    "minecraft:angry": {
+      "ambient_sound": "minecraft:entity.wolf_angry.ambient",
+      "death_sound": "minecraft:entity.wolf_angry.death",
+      "growl_sound": "minecraft:entity.wolf_angry.growl",
+      "hurt_sound": "minecraft:entity.wolf_angry.hurt",
+      "pant_sound": "minecraft:entity.wolf_angry.pant",
+      "whine_sound": "minecraft:entity.wolf_angry.whine"
+    },
+    "minecraft:cute": {
+      "ambient_sound": "minecraft:entity.wolf_cute.ambient",
+      "death_sound": "minecraft:entity.wolf_cute.death",
+      "growl_sound": "minecraft:entity.wolf_cute.growl",
+      "hurt_sound": "minecraft:entity.wolf_cute.hurt",
+      "pant_sound": "minecraft:entity.wolf_cute.pant",
+      "whine_sound": "minecraft:entity.wolf_cute.whine"
+    },
+    "minecraft:classic": {
+      "ambient_sound": "minecraft:entity.wolf.ambient",
+      "death_sound": "minecraft:entity.wolf.death",
+      "growl_sound": "minecraft:entity.wolf.growl",
+      "hurt_sound": "minecraft:entity.wolf.hurt",
+      "pant_sound": "minecraft:entity.wolf.pant",
+      "whine_sound": "minecraft:entity.wolf.whine"
+    },
+    "minecraft:grumpy": {
+      "ambient_sound": "minecraft:entity.wolf_grumpy.ambient",
+      "death_sound": "minecraft:entity.wolf_grumpy.death",
+      "growl_sound": "minecraft:entity.wolf_grumpy.growl",
+      "hurt_sound": "minecraft:entity.wolf_grumpy.hurt",
+      "pant_sound": "minecraft:entity.wolf_grumpy.pant",
+      "whine_sound": "minecraft:entity.wolf_grumpy.whine"
+    }
+  }
+}

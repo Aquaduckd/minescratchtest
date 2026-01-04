@@ -9,7 +9,6 @@ import threading
 import queue
 import json
 import os
-import zipfile
 from datetime import datetime
 from dataclasses import dataclass
 from typing import Dict, Optional, Tuple
@@ -1099,7 +1098,7 @@ def get_entity_type_id(entity_name: str) -> int:
     import json
     import os
     
-    registries_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'generated', 'reports', 'registries.json')
+    registries_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'extracted_data', 'registries.json')
     
     # Cache for entity type IDs
     if not hasattr(get_entity_type_id, '_entity_type_cache'):
@@ -1126,16 +1125,14 @@ def get_entity_type_id(entity_name: str) -> int:
 
 def load_loot_tables():
     """
-    Load block loot tables from the server JAR.
+    Load block loot tables from extracted_data/loot_table_mappings.json.
     Returns a dictionary mapping block names to item names.
     Thread-safe: if loading is in progress, returns empty dict to avoid blocking.
     """
-    import zipfile
     import json
     
     script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    jar_path = os.path.join(script_dir, 'data', 'server-1-21-10.jar')
-    inner_jar_path = os.path.join(script_dir, 'data', 'temp_inner_server.jar')
+    loot_mappings_file = os.path.join(script_dir, 'extracted_data', 'loot_table_mappings.json')
     
     # Initialize cache and loading lock if not exists
     if not hasattr(load_loot_tables, '_loot_table_cache'):
@@ -1159,91 +1156,16 @@ def load_loot_tables():
     try:
         load_loot_tables._is_loading = True
         
-        if not os.path.exists(jar_path):
-            print(f"  │  ⚠ Warning: Server JAR not found at {jar_path}, cannot load loot tables")
+        if not os.path.exists(loot_mappings_file):
+            print(f"  │  ⚠ Warning: Loot table mappings not found at {loot_mappings_file}")
+            print(f"  │  Run src/extract_server_data.py to generate extracted data")
         else:
-            # Extract inner JAR if needed
-            if not os.path.exists(inner_jar_path):
-                print(f"  │  → Extracting inner JAR for loot tables...")
-                try:
-                    with zipfile.ZipFile(jar_path, 'r') as jar:
-                        inner_jar_data = jar.read('META-INF/versions/1.21.10/server-1.21.10.jar')
-                        with open(inner_jar_path, 'wb') as f:
-                            f.write(inner_jar_data)
-                except Exception as e:
-                    print(f"  │  ⚠ Warning: Could not extract inner JAR: {e}")
-            
-            # Extract all block loot tables
-            if os.path.exists(inner_jar_path):
-                try:
-                    with zipfile.ZipFile(inner_jar_path, 'r') as inner_jar:
-                        all_files = inner_jar.namelist()
-                        block_loot_tables = [f for f in all_files 
-                                           if f.startswith('data/minecraft/loot_table/blocks/') 
-                                           and f.endswith('.json')]
-                        
-                        print(f"  │  → Loading {len(block_loot_tables)} block loot tables...")
-                        
-                        for loot_file in block_loot_tables:
-                            try:
-                                loot_data = inner_jar.read(loot_file)
-                                loot_json = json.loads(loot_data.decode('utf-8'))
-                                
-                                # Extract block name from filename
-                                block_name = loot_file.split('/')[-1].replace('.json', '')
-                                block_id = f"minecraft:{block_name}"
-                                
-                                # Parse loot table to find default item drop
-                                # For now, we'll use a simple approach:
-                                # 1. Look for simple item entries (no alternatives)
-                                # 2. For alternatives, use the first non-silk-touch option
-                                item_name = None
-                                
-                                if 'pools' in loot_json and len(loot_json['pools']) > 0:
-                                    pool = loot_json['pools'][0]  # Use first pool
-                                    
-                                    if 'entries' in pool and len(pool['entries']) > 0:
-                                        entry = pool['entries'][0]
-                                        
-                                        # Handle simple item entry
-                                        if entry.get('type') == 'minecraft:item':
-                                            item_name = entry.get('name')
-                                        
-                                        # Handle alternatives (e.g., silk touch vs normal)
-                                        elif entry.get('type') == 'minecraft:alternatives':
-                                            if 'children' in entry:
-                                                # Find first item that's not silk touch
-                                                for child in entry['children']:
-                                                    if child.get('type') == 'minecraft:item':
-                                                        # Check if it has silk touch condition
-                                                        has_silk_touch = False
-                                                        if 'conditions' in child:
-                                                            for condition in child['conditions']:
-                                                                if condition.get('condition') == 'minecraft:match_tool':
-                                                                    has_silk_touch = True
-                                                                    break
-                                                        
-                                                        if not has_silk_touch:
-                                                            item_name = child.get('name')
-                                                            break
-                                                
-                                                # If no non-silk-touch found, use first item
-                                                if item_name is None and len(entry['children']) > 0:
-                                                    first_child = entry['children'][0]
-                                                    if first_child.get('type') == 'minecraft:item':
-                                                        item_name = first_child.get('name')
-                                
-                                if item_name:
-                                    load_loot_tables._loot_table_cache[block_id] = item_name
-                            
-                            except Exception as e:
-                                # Skip invalid loot tables
-                                continue
-                        
-                        print(f"  │  ✓ Loaded {len(load_loot_tables._loot_table_cache)} loot table mappings")
-                
-                except Exception as e:
-                    print(f"  │  ⚠ Warning: Could not load loot tables: {e}")
+            try:
+                with open(loot_mappings_file, 'r') as f:
+                    load_loot_tables._loot_table_cache = json.load(f)
+                print(f"  │  ✓ Loaded {len(load_loot_tables._loot_table_cache)} loot table mappings")
+            except Exception as e:
+                print(f"  │  ⚠ Warning: Could not load loot tables: {e}")
     finally:
         load_loot_tables._is_loading = False
         load_loot_tables._loading_lock.release()
@@ -1265,8 +1187,8 @@ def get_block_state_id_from_item_id(item_id: int) -> Optional[int]:
     import json
     import os
     
-    registries_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'generated', 'reports', 'registries.json')
-    blocks_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'generated', 'reports', 'blocks.json')
+    registries_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'extracted_data', 'registries.json')
+    blocks_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'extracted_data', 'blocks.json')
     
     # Cache for item ID -> block state ID mapping
     if not hasattr(get_block_state_id_from_item_id, '_item_to_block_cache'):
@@ -1317,7 +1239,7 @@ def get_block_name_from_state_id(block_state_id: int) -> Optional[str]:
     import json
     import os
     
-    registries_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'generated', 'reports', 'blocks.json')
+    registries_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'extracted_data', 'blocks.json')
     
     # Cache for block state ID -> block name mapping
     if not hasattr(get_block_name_from_state_id, '_block_name_cache'):
@@ -1368,7 +1290,7 @@ def get_item_id_from_name(item_name: str) -> int:
     import json
     import os
     
-    registries_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'generated', 'reports', 'registries.json')
+    registries_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'extracted_data', 'registries.json')
     
     # Cache for item IDs
     if not hasattr(get_item_id_from_name, '_item_id_cache'):
@@ -1406,7 +1328,7 @@ def get_item_id_for_block(block_state_id: int) -> int:
     import json
     import os
     
-    registries_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'generated', 'reports', 'registries.json')
+    registries_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'extracted_data', 'registries.json')
     
     # Cache for item IDs
     if not hasattr(get_item_id_for_block, '_item_id_cache'):
@@ -1605,6 +1527,21 @@ def handle_client(client_socket, client_address):
                                         import traceback
                                         traceback.print_exc()
                             
+                            elif isinstance(parsed_packet, dict) and connection_state == ConnectionState.CONFIGURATION and parsed_packet_id == 2:
+                                # Plugin Message (Configuration)
+                                channel = parsed_packet.get("channel", "")
+                                data = parsed_packet.get("data", b"")
+                                print(f"  │  Type: Plugin Message")
+                                print(f"  │  Channel: {channel}")
+                                if channel == "minecraft:brand":
+                                    try:
+                                        brand = data.decode('utf-8')
+                                        print(f"  │  Brand: {brand}")
+                                    except:
+                                        print(f"  │  Data: {len(data)} bytes")
+                                else:
+                                    print(f"  │  Data: {len(data)} bytes")
+                            
                             elif isinstance(parsed_packet, list) and connection_state == ConnectionState.CONFIGURATION and parsed_packet_id == 0x07:
                                 # Serverbound Known Packs (parsed as list)
                                 print(f"  │  Type: Serverbound Known Packs")
@@ -1615,7 +1552,7 @@ def handle_client(client_socket, client_address):
                                 known_packs_received = True
                                 
                                 # Load registry data from JSON file
-                                registry_data_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data', 'registry_data.json')
+                                registry_data_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'extracted_data', 'registry_data.json')
                                 registry_json_data = {}
                                 if os.path.exists(registry_data_file):
                                     try:
@@ -1624,55 +1561,27 @@ def handle_client(client_socket, client_address):
                                     except Exception as e:
                                         print(f"  │  ⚠ Warning: Could not load registry_data.json: {e}")
                                 
-                                # Extract entries from server JAR (must be defined before get_registry_entries)
-                                def get_jar_entries(registry_path, registry_name):
-                                    """Extract entries from server JAR for a given registry path.
-                                    Note: Inner JAR should already be extracted during server initialization.
-                                    This function will extract it as a fallback if needed.
-                                    """
-                                    script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-                                    jar_path = os.path.join(script_dir, 'data', 'server-1-21-10.jar')
-                                    inner_jar_path = os.path.join(script_dir, 'data', 'temp_inner_server.jar')
-                                    
-                                    if not os.path.exists(jar_path):
-                                        return []
-                                    
-                                    # Inner JAR should already be extracted during initialization
-                                    # Fallback: extract now if not done during init
-                                    if not os.path.exists(inner_jar_path):
+                                def load_json_list(file_path):
+                                    """Load a JSON list file from extracted_data/."""
+                                    if os.path.exists(file_path):
                                         try:
-                                            with zipfile.ZipFile(jar_path, 'r') as jar:
-                                                inner_jar_data = jar.read('META-INF/versions/1.21.10/server-1.21.10.jar')
-                                                with open(inner_jar_path, 'wb') as f:
-                                                    f.write(inner_jar_data)
+                                            with open(file_path, 'r') as f:
+                                                return json.load(f)
                                         except Exception:
                                             return []
-                                    
-                                    try:
-                                        with zipfile.ZipFile(inner_jar_path, 'r') as inner_jar:
-                                            all_files = inner_jar.namelist()
-                                            registry_files = [f for f in all_files 
-                                                            if registry_path in f 
-                                                            and f.endswith('.json') 
-                                                            and '/tags/' not in f]
-                                            
-                                            entries = []
-                                            for f in registry_files:
-                                                filename = os.path.basename(f)
-                                                entry_name = filename.replace('.json', '')
-                                                entries.append(f"minecraft:{entry_name}")
-                                            
-                                            return sorted(list(set(entries)))
-                                    except Exception:
-                                        return []
+                                    return []
                                 
                                 def get_biome_entries():
-                                    """Extract all biome entries from server JAR."""
-                                    return get_jar_entries('worldgen/biome/', 'biome')
+                                    """Load all biome entries from extracted_data/biomes.json."""
+                                    script_dir = os.path.dirname(os.path.dirname(__file__))
+                                    biomes_file = os.path.join(script_dir, 'extracted_data', 'biomes.json')
+                                    return load_json_list(biomes_file)
                                 
                                 def get_damage_type_entries():
-                                    """Extract all damage_type entries from server JAR."""
-                                    return get_jar_entries('damage_type/', 'damage_type')
+                                    """Load all damage_type entries from extracted_data/damage_types.json."""
+                                    script_dir = os.path.dirname(os.path.dirname(__file__))
+                                    damage_types_file = os.path.join(script_dir, 'extracted_data', 'damage_types.json')
+                                    return load_json_list(damage_types_file)
                                 
                                 # Build required registries list with actual entry names
                                 def get_registry_entries(registry_id):
@@ -1714,6 +1623,10 @@ def handle_client(client_socket, client_address):
                                             "minecraft:cow_variant": [("minecraft:cold", None), ("minecraft:temperate", None), ("minecraft:warm", None)],
                                             "minecraft:pig_variant": [("minecraft:cold", None), ("minecraft:temperate", None), ("minecraft:warm", None)],
                                             "minecraft:wolf_sound_variant": [("minecraft:angry", None), ("minecraft:big", None), ("minecraft:classic", None), ("minecraft:cute", None), ("minecraft:grumpy", None), ("minecraft:puglin", None), ("minecraft:sad", None)],
+                                            # Painting variants - common painting names
+                                            "minecraft:painting_variant": [("minecraft:kebab", None), ("minecraft:aztec", None), ("minecraft:alban", None), ("minecraft:aztec2", None), ("minecraft:bomb", None), ("minecraft:plant", None), ("minecraft:wasteland", None), ("minecraft:pool", None), ("minecraft:courbet", None), ("minecraft:sea", None), ("minecraft:sunset", None), ("minecraft:creebet", None), ("minecraft:wanderer", None), ("minecraft:graham", None), ("minecraft:match", None), ("minecraft:bust", None), ("minecraft:stage", None), ("minecraft:void", None), ("minecraft:skull_and_roses", None), ("minecraft:wither", None), ("minecraft:fighters", None), ("minecraft:pointer", None), ("minecraft:pigscene", None), ("minecraft:burning_skull", None), ("minecraft:skeleton", None), ("minecraft:donkey_kong", None)],
+                                            # Wolf variants - common wolf variants
+                                            "minecraft:wolf_variant": [("minecraft:striped", None), ("minecraft:chestnut", None), ("minecraft:rusty", None), ("minecraft:spotted", None), ("minecraft:snowy", None), ("minecraft:black", None), ("minecraft:ash", None), ("minecraft:wood", None)],
                                         }
                                         return fallbacks.get(registry_id, [])
                                 
@@ -2856,7 +2769,7 @@ def handle_client(client_socket, client_address):
 
 def initialize_server_data():
     """
-    Initialize server data by extracting JAR files and pre-loading caches.
+    Initialize server data by pre-loading caches from extracted_data/.
     This should be called once before the server starts accepting connections.
     """
     print(f"{'='*60}")
@@ -2864,30 +2777,18 @@ def initialize_server_data():
     print(f"{'='*60}")
     
     script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    jar_path = os.path.join(script_dir, 'data', 'server-1-21-10.jar')
-    inner_jar_path = os.path.join(script_dir, 'data', 'temp_inner_server.jar')
+    extracted_data_dir = os.path.join(script_dir, 'extracted_data')
     
-    # Step 1: Extract inner JAR if needed
-    if not os.path.exists(jar_path):
-        print(f"⚠ Warning: Server JAR not found at {jar_path}")
+    # Check if extracted_data exists
+    if not os.path.exists(extracted_data_dir):
+        print(f"⚠ Warning: extracted_data/ directory not found at {extracted_data_dir}")
+        print(f"  Run src/extract_server_data.py to generate extracted data")
         print(f"  Some features may not work correctly.")
         return False
     
-    if not os.path.exists(inner_jar_path):
-        print(f"→ Extracting inner JAR from server JAR...")
-        try:
-            with zipfile.ZipFile(jar_path, 'r') as jar:
-                inner_jar_data = jar.read('META-INF/versions/1.21.10/server-1.21.10.jar')
-                with open(inner_jar_path, 'wb') as f:
-                    f.write(inner_jar_data)
-            print(f"✓ Inner JAR extracted to {inner_jar_path}")
-        except Exception as e:
-            print(f"✗ Error extracting inner JAR: {e}")
-            return False
-    else:
-        print(f"✓ Inner JAR already exists at {inner_jar_path}")
+    print(f"✓ Using extracted data from {extracted_data_dir}")
     
-    # Step 2: Pre-load loot tables
+    # Step 1: Pre-load loot tables
     print(f"→ Pre-loading loot tables...")
     try:
         load_loot_tables()
@@ -2896,7 +2797,7 @@ def initialize_server_data():
     except Exception as e:
         print(f"⚠ Warning: Could not pre-load loot tables: {e}")
     
-    # Step 3: Pre-load item registry (for item IDs)
+    # Step 2: Pre-load item registry (for item IDs)
     print(f"→ Pre-loading item registry...")
     try:
         # Trigger item ID cache loading
@@ -2906,7 +2807,7 @@ def initialize_server_data():
     except Exception as e:
         print(f"⚠ Warning: Could not pre-load item registry: {e}")
     
-    # Step 4: Pre-load entity type registry
+    # Step 3: Pre-load entity type registry
     print(f"→ Pre-loading entity type registry...")
     try:
         # Trigger entity type cache loading

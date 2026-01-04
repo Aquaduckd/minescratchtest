@@ -1295,13 +1295,11 @@
                 }
             }
             
+            // First, fetch all heightmaps we need (including for cross-chunk connections)
+            const heightMapCache = new Map(); // chunk key -> height map data
+            
             for (const chunk of chunksToLoad) {
                 const chunkKey = `${chunk.x},${chunk.z}`;
-                
-                // Always recreate to ensure sphere filtering is correct for current player position
-                // (We already removed all chunks above, so this check is just for safety)
-                if (heightMapObjects.has(chunkKey)) continue;
-                
                 try {
                     const response = await fetch(`/api/heightmap?chunk_x=${chunk.x}&chunk_z=${chunk.z}`);
                     if (!response.ok) continue;
@@ -1309,9 +1307,26 @@
                     const data = await response.json();
                     if (!data.use_terrain || !data.height_map_2d) continue;
                     
+                    heightMapCache.set(chunkKey, data.height_map_2d);
+                } catch (error) {
+                    // Silently ignore errors
+                }
+            }
+            
+            // Now render wireframes with access to all loaded heightmaps
+            for (const chunk of chunksToLoad) {
+                const chunkKey = `${chunk.x},${chunk.z}`;
+                
+                // Always recreate to ensure sphere filtering is correct for current player position
+                // (We already removed all chunks above, so this check is just for safety)
+                if (heightMapObjects.has(chunkKey)) continue;
+                
+                const heightMap = heightMapCache.get(chunkKey);
+                if (!heightMap) continue;
+                
+                try {
                     // Create group for this chunk's height map
                     const heightMapGroup = new THREE.Group();
-                    const heightMap = data.height_map_2d;
                     
                     // Material for wireframe - use subtle green
                     const wireframeMaterial = new THREE.LineBasicMaterial({ 
@@ -1378,15 +1393,30 @@
                             
                             // Connect forward side (north) corners to back corners of forward neighbor
                             // Only connect if both squares are within sphere
-                            if (z < 15) {
-                                const forwardWorldZ = worldZ + 1;
-                                const forwardDx = (worldX + 0.5) - playerX;
-                                const forwardDz = (forwardWorldZ + 0.5) - playerZ;
-                                const forwardDistance = Math.sqrt(forwardDx * forwardDx + forwardDz * forwardDz);
+                            // Handle both same-chunk and cross-chunk neighbors
+                            const forwardWorldZ = worldZ + 1;
+                            const forwardDx = (worldX + 0.5) - playerX;
+                            const forwardDz = (forwardWorldZ + 0.5) - playerZ;
+                            const forwardDistance = Math.sqrt(forwardDx * forwardDx + forwardDz * forwardDz);
+                            
+                            // Only connect if neighbor is also within sphere
+                            if (forwardDistance <= radius) {
+                                let forwardHeight;
+                                if (z < 15) {
+                                    // Neighbor is in same chunk
+                                    forwardHeight = heightMap[z + 1][x] + 1;
+                                } else {
+                                    // Neighbor is in adjacent chunk (z+1)
+                                    const forwardChunkKey = `${chunk.x},${chunk.z + 1}`;
+                                    const forwardChunkHeightMap = heightMapCache.get(forwardChunkKey);
+                                    if (forwardChunkHeightMap) {
+                                        forwardHeight = forwardChunkHeightMap[0][x] + 1; // First row of forward chunk
+                                    } else {
+                                        forwardHeight = null;
+                                    }
+                                }
                                 
-                                // Only connect if neighbor is also within sphere
-                                if (forwardDistance <= radius) {
-                                    const forwardHeight = heightMap[z + 1][x] + 1; // Top of forward neighbor block
+                                if (forwardHeight !== null) {
                                     // Top-forward corner of current square to top-back corner of forward neighbor
                                     const topLineGeometry = new THREE.BufferGeometry().setFromPoints([
                                         new THREE.Vector3(worldX + 1, topHeight, worldZ + 1),
@@ -1407,15 +1437,30 @@
                             
                             // Connect left side (west) corners to right side corners of left neighbor
                             // Only connect if both squares are within sphere
-                            if (x > 0) {
-                                const leftWorldX = worldX - 1;
-                                const leftDx = (leftWorldX + 0.5) - playerX;
-                                const leftDz = (worldZ + 0.5) - playerZ;
-                                const leftDistance = Math.sqrt(leftDx * leftDx + leftDz * leftDz);
+                            // Handle both same-chunk and cross-chunk neighbors
+                            const leftWorldX = worldX - 1;
+                            const leftDx = (leftWorldX + 0.5) - playerX;
+                            const leftDz = (worldZ + 0.5) - playerZ;
+                            const leftDistance = Math.sqrt(leftDx * leftDx + leftDz * leftDz);
+                            
+                            // Only connect if neighbor is also within sphere
+                            if (leftDistance <= radius) {
+                                let leftHeight;
+                                if (x > 0) {
+                                    // Neighbor is in same chunk
+                                    leftHeight = heightMap[z][x - 1] + 1;
+                                } else {
+                                    // Neighbor is in adjacent chunk (x-1)
+                                    const leftChunkKey = `${chunk.x - 1},${chunk.z}`;
+                                    const leftChunkHeightMap = heightMapCache.get(leftChunkKey);
+                                    if (leftChunkHeightMap) {
+                                        leftHeight = leftChunkHeightMap[z][15] + 1; // Last column of left chunk
+                                    } else {
+                                        leftHeight = null;
+                                    }
+                                }
                                 
-                                // Only connect if neighbor is also within sphere
-                                if (leftDistance <= radius) {
-                                    const leftHeight = heightMap[z][x - 1] + 1; // Top of left neighbor block
+                                if (leftHeight !== null) {
                                     // Top-left corner of current square to top-right corner of left neighbor
                                     const topLineGeometry = new THREE.BufferGeometry().setFromPoints([
                                         new THREE.Vector3(worldX, topHeight, worldZ + 1),
@@ -1436,15 +1481,30 @@
                             
                             // Connect back side (south) corners to forward corners of back neighbor
                             // Only connect if both squares are within sphere
-                            if (z > 0) {
-                                const backWorldZ = worldZ - 1;
-                                const backDx = (worldX + 0.5) - playerX;
-                                const backDz = (backWorldZ + 0.5) - playerZ;
-                                const backDistance = Math.sqrt(backDx * backDx + backDz * backDz);
+                            // Handle both same-chunk and cross-chunk neighbors
+                            const backWorldZ = worldZ - 1;
+                            const backDx = (worldX + 0.5) - playerX;
+                            const backDz = (backWorldZ + 0.5) - playerZ;
+                            const backDistance = Math.sqrt(backDx * backDx + backDz * backDz);
+                            
+                            // Only connect if neighbor is also within sphere
+                            if (backDistance <= radius) {
+                                let backHeight;
+                                if (z > 0) {
+                                    // Neighbor is in same chunk
+                                    backHeight = heightMap[z - 1][x] + 1;
+                                } else {
+                                    // Neighbor is in adjacent chunk (z-1)
+                                    const backChunkKey = `${chunk.x},${chunk.z - 1}`;
+                                    const backChunkHeightMap = heightMapCache.get(backChunkKey);
+                                    if (backChunkHeightMap) {
+                                        backHeight = backChunkHeightMap[15][x] + 1; // Last row of back chunk
+                                    } else {
+                                        backHeight = null;
+                                    }
+                                }
                                 
-                                // Only connect if neighbor is also within sphere
-                                if (backDistance <= radius) {
-                                    const backHeight = heightMap[z - 1][x] + 1; // Top of back neighbor block
+                                if (backHeight !== null) {
                                     // Top-back corner of current square to top-forward corner of back neighbor
                                     const topLineGeometry = new THREE.BufferGeometry().setFromPoints([
                                         new THREE.Vector3(worldX + 1, topHeight, worldZ),

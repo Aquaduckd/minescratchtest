@@ -1,0 +1,78 @@
+{
+  "extraction_date": "2026-01-04T12:47:42.800963",
+  "minecraft_version": "1.21.10",
+  "protocol_version": 773,
+  "extracted_data": {
+    "loot_tables": {
+      "description": "Block loot tables extracted from data/minecraft/loot_table/blocks/",
+      "files": [
+        "loot_tables.json - Full loot table JSON data for each block",
+        "loot_table_mappings.json - Simplified block -> item mappings"
+      ],
+      "source": "server.jar -> inner JAR -> data/minecraft/loot_table/blocks/*.json"
+    },
+    "biomes": {
+      "description": "Biome entries extracted from data/minecraft/worldgen/biome/",
+      "files": [
+        "biomes.json - List of all biome resource IDs"
+      ],
+      "source": "server.jar -> inner JAR -> data/minecraft/worldgen/biome/*.json"
+    },
+    "damage_types": {
+      "description": "Damage type entries extracted from data/minecraft/damage_type/",
+      "files": [
+        "damage_types.json - List of all damage type resource IDs"
+      ],
+      "source": "server.jar -> inner JAR -> data/minecraft/damage_type/*.json"
+    },
+    "registries": {
+      "description": "Registry data (copied from generated/reports/)",
+      "files": [
+        "registries.json - Full registry data with protocol IDs"
+      ],
+      "source": "Minecraft data generator reports"
+    },
+    "blocks": {
+      "description": "Block data (copied from generated/reports/)",
+      "files": [
+        "blocks.json - Full block data with state IDs"
+      ],
+      "source": "Minecraft data generator reports"
+    },
+    "items": {
+      "description": "Item data (copied from generated/reports/)",
+      "files": [
+        "items.json - Full item data with protocol IDs"
+      ],
+      "source": "Minecraft data generator reports"
+    },
+    "commands": {
+      "description": "Command data (copied from generated/reports/)",
+      "files": [
+        "commands.json - Command definitions"
+      ],
+      "source": "Minecraft data generator reports"
+    },
+    "datapack": {
+      "description": "Datapack data (copied from generated/reports/)",
+      "files": [
+        "datapack.json - Datapack definitions"
+      ],
+      "source": "Minecraft data generator reports"
+    },
+    "packets": {
+      "description": "Packet data (copied from generated/reports/)",
+      "files": [
+        "packets.json - Packet definitions"
+      ],
+      "source": "Minecraft data generator reports"
+    }
+  },
+  "usage_in_server": {
+    "loot_tables": "Used in load_loot_tables() to determine item drops from broken blocks",
+    "biomes": "Used in get_registry_entries() for minecraft:worldgen/biome registry",
+    "damage_types": "Used in get_registry_entries() for minecraft:damage_type registry",
+    "registries": "Used throughout server for protocol ID lookups (items, entities, etc.)",
+    "blocks": "Used for block state ID to block name mappings"
+  }
+}

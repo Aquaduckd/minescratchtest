@@ -584,6 +584,13 @@ class PacketParser:
         elif state == ConnectionState.CONFIGURATION:
             if packet_id == 0:  # Client Information
                 return packet_id, PacketParser._parse_client_information(reader)
+            elif packet_id == 2:  # Plugin Message (Configuration)
+                # Parse channel and data
+                channel = reader.read_string()
+                # Read remaining bytes
+                remaining_length = reader.remaining()
+                data = reader.read_bytes(remaining_length) if remaining_length > 0 else b""
+                return packet_id, {"channel": channel, "data": data}
             elif packet_id == 3:  # Acknowledge Finish Configuration
                 return packet_id, None  # Empty packet
             elif packet_id == 0x07:  # Serverbound Known Packs
@@ -1609,7 +1616,7 @@ class PacketBuilder:
                 for x in range(16):
                     heightmap_entries.append(ground_y)
         
-        # Pack into longs (same format as Data Array)
+        # Pack into longs (same format as Data Array) - must be done for both terrain and flat world
         entries_per_long = 64 // heightmap_bits_per_entry  # 7 entries per long
         num_longs = (256 + entries_per_long - 1) // entries_per_long
         
