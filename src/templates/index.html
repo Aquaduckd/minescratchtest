@@ -192,6 +192,14 @@
         .tick-controls button.resume-btn:hover {
             background: #1976D2;
         }
+        
+        .tick-controls button.camera-btn {
+            background: #9C27B0;
+        }
+        
+        .tick-controls button.camera-btn:hover {
+            background: #7B1FA2;
+        }
     </style>
 </head>
 <body>
@@ -209,6 +217,11 @@
                 <button id="pauseBtn" class="pause-btn" onclick="pauseUpdates()">⏸ Pause</button>
                 <button id="resumeBtn" class="resume-btn" onclick="resumeUpdates()" style="display: none;">▶ Resume</button>
                 <button id="stepBtn" onclick="stepTick()" disabled>⏭ Step</button>
+            </div>
+            
+            <div class="tick-controls">
+                <h2>Camera Mode</h2>
+                <button id="cameraModeBtn" class="camera-btn" onclick="toggleCameraMode()">🎥 Follow (XZ)</button>
             </div>
             
             <div class="info">
@@ -235,7 +248,7 @@
         
         <div class="canvas-container">
             <canvas id="canvas"></canvas>
-            <div class="controls-hint">
+            <div class="controls-hint" id="controlsHint">
                 <strong>Controls:</strong> Left Click + Drag to rotate | Right Click + Drag to pan | Scroll to zoom
             </div>
         </div>
@@ -244,12 +257,25 @@
     <script>
         // Three.js Scene Setup
         let scene, camera, renderer, controls;
+        let canvas; // Canvas element - declared at module level so it can be reused
         let gridHelper;
         let playerObjects = new Map();
         let entityObjects = new Map();  // entity_id -> { current: THREE.Object3D, next: THREE.Object3D, line: THREE.Line }
         let heightMapObjects = new Map();  // chunk key -> THREE.Group containing height map visualization
         let checkedBlocks = new Map();  // "x,y,z" -> { wireframe: THREE.LineSegments, label: THREE.Sprite }
         let cachedBlocks = new Map();  // "x,y,z" -> { wireframe: THREE.LineSegments, label: THREE.Sprite }
+        
+        // Camera mode: 'orbit' (follows player with orbit controls) or 'follow' (moves with player, adjustable pitch/yaw)
+        let cameraMode = 'orbit';
+        
+        // Camera settings for follow mode
+        const followCameraDistance = 15; // Distance from player
+        let followCameraRotation = { pitch: -0.3, yaw: 0 }; // Adjustable pitch and yaw
+        
+        // Mouse controls for adjusting camera in follow mode
+        let isMouseDown = false;
+        let lastMouseX = 0;
+        let lastMouseY = 0;
         
         function init3D() {
             // Scene
@@ -270,7 +296,7 @@
             camera.lookAt(0, 64, 0);  // Look at ground level
             
             // Renderer
-            const canvas = document.getElementById('canvas');
+            canvas = document.getElementById('canvas');
             renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true });
             renderer.setSize(canvas.clientWidth, canvas.clientHeight);
             renderer.setPixelRatio(window.devicePixelRatio);
@@ -303,7 +329,8 @@
                     controls.dampingFactor = 0.05;
                     controls.minDistance = 5;
                     controls.maxDistance = 200;
-                    controls.target.set(0, 64, 0);  // Target ground level
+                    // Target will be set to player position when player is available
+                    controls.target.set(0, 64, 0);  // Initial target at ground level
                 } else {
                     throw new Error('OrbitControls not available');
                 }
@@ -365,12 +392,55 @@
             // Handle window resize
             window.addEventListener('resize', onWindowResize);
             
+            // Mouse controls for follow mode camera adjustment
+            canvas.addEventListener('mousedown', (e) => {
+                if (cameraMode === 'follow' && e.button === 0) { // Left mouse button
+                    isMouseDown = true;
+                    lastMouseX = e.clientX;
+                    lastMouseY = e.clientY;
+                    e.preventDefault();
+                }
+            });
+            
+            canvas.addEventListener('mouseup', (e) => {
+                if (e.button === 0) {
+                    isMouseDown = false;
+                }
+            });
+            
+            canvas.addEventListener('mousemove', (e) => {
+                if (cameraMode === 'follow' && isMouseDown) {
+                    const deltaX = e.clientX - lastMouseX;
+                    const deltaY = e.clientY - lastMouseY;
+                    
+                    // Adjust yaw (horizontal rotation) - left/right mouse movement
+                    followCameraRotation.yaw -= deltaX * 0.01;
+                    
+                    // Adjust pitch (vertical rotation) - up/down mouse movement
+                    followCameraRotation.pitch += deltaY * 0.01;
+                    
+                    // Clamp pitch to reasonable limits (prevent flipping)
+                    followCameraRotation.pitch = Math.max(-Math.PI / 2 + 0.1, Math.min(Math.PI / 2 - 0.1, followCameraRotation.pitch));
+                    
+                    lastMouseX = e.clientX;
+                    lastMouseY = e.clientY;
+                    e.preventDefault();
+                }
+            });
+            
+            // Prevent context menu on right click in follow mode
+            canvas.addEventListener('contextmenu', (e) => {
+                if (cameraMode === 'follow') {
+                    e.preventDefault();
+                }
+            });
+            
             // Start animation loop
             animate();
         }
         
         function onWindowResize() {
-            const canvas = document.getElementById('canvas');
+            if (!canvas) return;
             camera.aspect = canvas.clientWidth / canvas.clientHeight;
             camera.updateProjectionMatrix();
             renderer.setSize(canvas.clientWidth, canvas.clientHeight);
@@ -378,7 +448,8 @@
         
         function animate() {
             requestAnimationFrame(animate);
-            if (controls && controls.update) {
+            // Only update controls in orbit mode (in follow mode, camera is controlled directly)
+            if (controls && controls.update && cameraMode === 'orbit') {
                 controls.update();
             }
             renderer.render(scene, camera);
@@ -603,8 +674,74 @@
             }
         }
         
+        function toggleCameraMode() {
+            cameraMode = cameraMode === 'orbit' ? 'follow' : 'orbit';
+            const btn = document.getElementById('cameraModeBtn');
+            const hint = document.getElementById('controlsHint');
+            if (cameraMode === 'follow') {
+                btn.textContent = '🎥 Orbit';
+                hint.innerHTML = '<strong>Follow Mode:</strong> Left Click + Drag to adjust camera angle | Camera follows player';
+            } else {
+                btn.textContent = '🎥 Follow (XZ)';
+                hint.innerHTML = '<strong>Controls:</strong> Left Click + Drag to rotate | Right Click + Drag to pan | Scroll to zoom';
+            }
+        }
+        
         async function update3DVisualization(data) {
             if (!scene) return;
+            
+            // Update camera based on mode
+            if (data.players && data.players.length > 0 && camera) {
+                const player = data.players[0];
+                const playerTarget = new THREE.Vector3(player.x, player.y + 1.62, player.z); // Eye level
+                
+                if (cameraMode === 'follow') {
+                    // Follow mode: camera moves exactly as player moves (same delta), with fixed pitch/yaw
+                    // Calculate camera offset based on fixed rotation and distance
+                    const yawRad = followCameraRotation.yaw;
+                    const pitchRad = followCameraRotation.pitch;
+                    
+                    // Calculate offset vector from player to camera based on fixed pitch/yaw
+                    const offsetX = -Math.sin(yawRad) * Math.cos(pitchRad) * followCameraDistance;
+                    const offsetY = -Math.sin(pitchRad) * followCameraDistance;
+                    const offsetZ = Math.cos(yawRad) * Math.cos(pitchRad) * followCameraDistance;
+                    
+                    // Camera position = player position + offset (moves exactly as player moves)
+                    const cameraX = player.x + offsetX;
+                    const cameraY = player.y + offsetY;
+                    const cameraZ = player.z + offsetZ;
+                    
+                    // Set camera position directly (no lerp, so it moves exactly with player)
+                    camera.position.set(cameraX, cameraY, cameraZ);
+                    
+                    // Always look at player (target follows player)
+                    camera.lookAt(playerTarget);
+                    
+                    // Update controls target to player position (even if disabled, this prevents drift)
+                    if (controls && controls.target) {
+                        controls.target.copy(playerTarget);
+                    }
+                    
+                    // Disable controls in follow mode
+                    if (controls && controls.enabled !== undefined) {
+                        controls.enabled = false;
+                    }
+                } else {
+                    // Orbit mode: update controls target to follow player (allows orbiting around player)
+                    if (controls && controls.target) {
+                        // Smoothly interpolate target to player position
+                        controls.target.lerp(playerTarget, 0.1);
+                    } else {
+                        // Fallback if controls don't have target
+                        camera.lookAt(playerTarget);
+                    }
+                    
+                    // Enable controls in orbit mode
+                    if (controls && controls.enabled !== undefined) {
+                        controls.enabled = true;
+                    }
+                }
+            }
             
             // Update player objects
             const currentPlayerIds = new Set(data.players.map(p => p.uuid));
