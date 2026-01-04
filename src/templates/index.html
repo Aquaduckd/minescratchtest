@@ -265,6 +265,11 @@
         let checkedBlocks = new Map();  // "x,y,z" -> { wireframe: THREE.LineSegments, label: THREE.Sprite }
         let cachedBlocks = new Map();  // "x,y,z" -> { wireframe: THREE.LineSegments, label: THREE.Sprite }
         
+        // Track last player position for wireframe updates
+        let lastWireframePlayerX = null;
+        let lastWireframePlayerZ = null;
+        const WIREFRAME_UPDATE_THRESHOLD = 2.0; // Only update if player moved more than 2 blocks
+        
         // Camera mode: 'orbit' (follows player with orbit controls) or 'follow' (moves with player, adjustable pitch/yaw)
         let cameraMode = 'orbit';
         
@@ -1212,24 +1217,51 @@
                 // Use default (0, 0) if we can't get player position
             }
             
-            // Calculate which chunks are within 16 block radius
-            const radius = 16;
+            // Check if player has moved significantly
+            if (lastWireframePlayerX !== null && lastWireframePlayerZ !== null) {
+                const dx = playerX - lastWireframePlayerX;
+                const dz = playerZ - lastWireframePlayerZ;
+                const distance = Math.sqrt(dx * dx + dz * dz);
+                
+                // Only update if player moved more than threshold
+                if (distance < WIREFRAME_UPDATE_THRESHOLD) {
+                    return; // Skip update, player hasn't moved enough
+                }
+            }
+            
+            // Update last known position
+            lastWireframePlayerX = playerX;
+            lastWireframePlayerZ = playerZ;
+            
+            // Calculate which chunks are within sphere of radius 8 centered around player
+            const radius = 8;
             const playerChunkX = Math.floor(playerX / 16);
             const playerChunkZ = Math.floor(playerZ / 16);
             
-            // Get chunks within radius (chunk is 16x16, so radius of 16 blocks = 1 chunk in each direction)
+            // Get chunks within sphere radius
             const chunksToLoad = [];
+            // Check chunks in a square area that could contain the sphere
             const chunkRadius = Math.ceil(radius / 16) + 1; // Add 1 for safety
             
             for (let cx = playerChunkX - chunkRadius; cx <= playerChunkX + chunkRadius; cx++) {
                 for (let cz = playerChunkZ - chunkRadius; cz <= playerChunkZ + chunkRadius; cz++) {
-                    // Check if chunk center is within radius
-                    const chunkCenterX = cx * 16 + 8;
-                    const chunkCenterZ = cz * 16 + 8;
-                    const dx = chunkCenterX - playerX;
-                    const dz = chunkCenterZ - playerZ;
+                    // Check if any part of the chunk is within the sphere
+                    // Check the closest point of the chunk to the player
+                    const chunkMinX = cx * 16;
+                    const chunkMaxX = (cx + 1) * 16;
+                    const chunkMinZ = cz * 16;
+                    const chunkMaxZ = (cz + 1) * 16;
+                    
+                    // Find the closest point on the chunk to the player
+                    const closestX = Math.max(chunkMinX, Math.min(playerX, chunkMaxX));
+                    const closestZ = Math.max(chunkMinZ, Math.min(playerZ, chunkMaxZ));
+                    
+                    // Calculate distance from player to closest point on chunk
+                    const dx = closestX - playerX;
+                    const dz = closestZ - playerZ;
                     const distance = Math.sqrt(dx * dx + dz * dz);
                     
+                    // Include chunk if closest point is within sphere radius
                     if (distance <= radius) {
                         chunksToLoad.push({x: cx, z: cz});
                     }
@@ -1249,10 +1281,25 @@
                 }
             }
             
+            // Force refresh all existing chunks to update sphere filtering based on new player position
+            // This ensures wireframes are correctly filtered for the new player position
+            for (const chunkKey of chunksToKeep) {
+                if (heightMapObjects.has(chunkKey)) {
+                    const oldGroup = heightMapObjects.get(chunkKey);
+                    oldGroup.children.forEach(child => {
+                        if (child.geometry) child.geometry.dispose();
+                        if (child.material) child.material.dispose();
+                    });
+                    scene.remove(oldGroup);
+                    heightMapObjects.delete(chunkKey);
+                }
+            }
+            
             for (const chunk of chunksToLoad) {
                 const chunkKey = `${chunk.x},${chunk.z}`;
                 
-                // Skip if we already have this chunk loaded
+                // Always recreate to ensure sphere filtering is correct for current player position
+                // (We already removed all chunks above, so this check is just for safety)
                 if (heightMapObjects.has(chunkKey)) continue;
                 
                 try {
@@ -1266,45 +1313,156 @@
                     const heightMapGroup = new THREE.Group();
                     const heightMap = data.height_map_2d;
                     
-                    // Render simple squares at height map height with number inside
+                    // Material for wireframe - use subtle green
+                    const wireframeMaterial = new THREE.LineBasicMaterial({ 
+                        color: 0x448844,  // Muted green instead of bright lime
+                        linewidth: 2
+                    });
+                    
+                    // Render wireframe squares at each heightmap position, but only within sphere
                     for (let z = 0; z < 16; z++) {
                         for (let x = 0; x < 16; x++) {
                             const height = heightMap[z][x];
                             const worldX = chunk.x * 16 + x;
                             const worldZ = chunk.z * 16 + z;
                             
-                            // Create a square plane at the height
-                            const planeGeometry = new THREE.PlaneGeometry(0.9, 0.9);
-                            const planeMaterial = new THREE.MeshBasicMaterial({ 
-                                color: 0xffff00,
-                                side: THREE.DoubleSide,
-                                transparent: true,
-                                opacity: 0.7
-                            });
-                            const plane = new THREE.Mesh(planeGeometry, planeMaterial);
-                            plane.position.set(worldX + 0.5, height, worldZ + 0.5);
-                            plane.rotation.x = -Math.PI / 2; // Horizontal plane
-                            heightMapGroup.add(plane);
+                            // Check if this square is within the sphere radius from player
+                            const dx = (worldX + 0.5) - playerX;
+                            const dz = (worldZ + 0.5) - playerZ;
+                            const distance = Math.sqrt(dx * dx + dz * dz);
                             
-                            // Add text label showing height value
-                            const canvas = document.createElement('canvas');
-                            const context = canvas.getContext('2d');
-                            canvas.width = 64;
-                            canvas.height = 64;
-                            context.fillStyle = 'rgba(0, 0, 0, 0.8)';
-                            context.fillRect(0, 0, canvas.width, canvas.height);
-                            context.fillStyle = '#ffffff';
-                            context.font = 'bold 24px Arial';
-                            context.textAlign = 'center';
-                            context.textBaseline = 'middle';
-                            context.fillText(height.toString(), canvas.width / 2, canvas.height / 2);
+                            // Skip if outside sphere
+                            if (distance > radius) continue;
                             
-                            const texture = new THREE.CanvasTexture(canvas);
-                            const spriteMaterial = new THREE.SpriteMaterial({ map: texture });
-                            const sprite = new THREE.Sprite(spriteMaterial);
-                            sprite.scale.set(0.8, 0.8, 1);
-                            sprite.position.set(worldX + 0.5, height + 0.01, worldZ + 0.5);
-                            heightMapGroup.add(sprite);
+                            // Heightmap gives block position, but we want to show the top of the block
+                            // So add 1 to the height
+                            const topHeight = height + 1;
+                            
+                            // Create wireframe square at the top of the block
+                            const squareSize = 1.0;
+                            const squareGeometry = new THREE.PlaneGeometry(squareSize, squareSize);
+                            const squareEdges = new THREE.EdgesGeometry(squareGeometry);
+                            const squareWireframe = new THREE.LineSegments(squareEdges, wireframeMaterial);
+                            squareWireframe.position.set(worldX + 0.5, topHeight, worldZ + 0.5);
+                            squareWireframe.rotation.x = -Math.PI / 2; // Horizontal plane
+                            heightMapGroup.add(squareWireframe);
+                            
+                            // Connect right side (east) corners to left side corners of right neighbor
+                            // Only connect if both squares are within sphere
+                            if (x < 15) {
+                                const rightWorldX = worldX + 1;
+                                const rightDx = (rightWorldX + 0.5) - playerX;
+                                const rightDz = (worldZ + 0.5) - playerZ;
+                                const rightDistance = Math.sqrt(rightDx * rightDx + rightDz * rightDz);
+                                
+                                // Only connect if neighbor is also within sphere
+                                if (rightDistance <= radius) {
+                                    const rightHeight = heightMap[z][x + 1] + 1; // Top of right neighbor block
+                                    // Top-right corner of current square to top-left corner of right neighbor
+                                    const topLineGeometry = new THREE.BufferGeometry().setFromPoints([
+                                        new THREE.Vector3(worldX + 1, topHeight, worldZ + 1),
+                                        new THREE.Vector3(worldX + 1, rightHeight, worldZ + 1)
+                                    ]);
+                                    const topLine = new THREE.Line(topLineGeometry, wireframeMaterial);
+                                    heightMapGroup.add(topLine);
+                                    
+                                    // Bottom-right corner of current square to bottom-left corner of right neighbor
+                                    const bottomLineGeometry = new THREE.BufferGeometry().setFromPoints([
+                                        new THREE.Vector3(worldX + 1, topHeight, worldZ),
+                                        new THREE.Vector3(worldX + 1, rightHeight, worldZ)
+                                    ]);
+                                    const bottomLine = new THREE.Line(bottomLineGeometry, wireframeMaterial);
+                                    heightMapGroup.add(bottomLine);
+                                }
+                            }
+                            
+                            // Connect forward side (north) corners to back corners of forward neighbor
+                            // Only connect if both squares are within sphere
+                            if (z < 15) {
+                                const forwardWorldZ = worldZ + 1;
+                                const forwardDx = (worldX + 0.5) - playerX;
+                                const forwardDz = (forwardWorldZ + 0.5) - playerZ;
+                                const forwardDistance = Math.sqrt(forwardDx * forwardDx + forwardDz * forwardDz);
+                                
+                                // Only connect if neighbor is also within sphere
+                                if (forwardDistance <= radius) {
+                                    const forwardHeight = heightMap[z + 1][x] + 1; // Top of forward neighbor block
+                                    // Top-forward corner of current square to top-back corner of forward neighbor
+                                    const topLineGeometry = new THREE.BufferGeometry().setFromPoints([
+                                        new THREE.Vector3(worldX + 1, topHeight, worldZ + 1),
+                                        new THREE.Vector3(worldX + 1, forwardHeight, worldZ + 1)
+                                    ]);
+                                    const topLine = new THREE.Line(topLineGeometry, wireframeMaterial);
+                                    heightMapGroup.add(topLine);
+                                    
+                                    // Bottom-forward corner of current square to bottom-back corner of forward neighbor
+                                    const bottomLineGeometry = new THREE.BufferGeometry().setFromPoints([
+                                        new THREE.Vector3(worldX, topHeight, worldZ + 1),
+                                        new THREE.Vector3(worldX, forwardHeight, worldZ + 1)
+                                    ]);
+                                    const bottomLine = new THREE.Line(bottomLineGeometry, wireframeMaterial);
+                                    heightMapGroup.add(bottomLine);
+                                }
+                            }
+                            
+                            // Connect left side (west) corners to right side corners of left neighbor
+                            // Only connect if both squares are within sphere
+                            if (x > 0) {
+                                const leftWorldX = worldX - 1;
+                                const leftDx = (leftWorldX + 0.5) - playerX;
+                                const leftDz = (worldZ + 0.5) - playerZ;
+                                const leftDistance = Math.sqrt(leftDx * leftDx + leftDz * leftDz);
+                                
+                                // Only connect if neighbor is also within sphere
+                                if (leftDistance <= radius) {
+                                    const leftHeight = heightMap[z][x - 1] + 1; // Top of left neighbor block
+                                    // Top-left corner of current square to top-right corner of left neighbor
+                                    const topLineGeometry = new THREE.BufferGeometry().setFromPoints([
+                                        new THREE.Vector3(worldX, topHeight, worldZ + 1),
+                                        new THREE.Vector3(worldX, leftHeight, worldZ + 1)
+                                    ]);
+                                    const topLine = new THREE.Line(topLineGeometry, wireframeMaterial);
+                                    heightMapGroup.add(topLine);
+                                    
+                                    // Bottom-left corner of current square to bottom-right corner of left neighbor
+                                    const bottomLineGeometry = new THREE.BufferGeometry().setFromPoints([
+                                        new THREE.Vector3(worldX, topHeight, worldZ),
+                                        new THREE.Vector3(worldX, leftHeight, worldZ)
+                                    ]);
+                                    const bottomLine = new THREE.Line(bottomLineGeometry, wireframeMaterial);
+                                    heightMapGroup.add(bottomLine);
+                                }
+                            }
+                            
+                            // Connect back side (south) corners to forward corners of back neighbor
+                            // Only connect if both squares are within sphere
+                            if (z > 0) {
+                                const backWorldZ = worldZ - 1;
+                                const backDx = (worldX + 0.5) - playerX;
+                                const backDz = (backWorldZ + 0.5) - playerZ;
+                                const backDistance = Math.sqrt(backDx * backDx + backDz * backDz);
+                                
+                                // Only connect if neighbor is also within sphere
+                                if (backDistance <= radius) {
+                                    const backHeight = heightMap[z - 1][x] + 1; // Top of back neighbor block
+                                    // Top-back corner of current square to top-forward corner of back neighbor
+                                    const topLineGeometry = new THREE.BufferGeometry().setFromPoints([
+                                        new THREE.Vector3(worldX + 1, topHeight, worldZ),
+                                        new THREE.Vector3(worldX + 1, backHeight, worldZ)
+                                    ]);
+                                    const topLine = new THREE.Line(topLineGeometry, wireframeMaterial);
+                                    heightMapGroup.add(topLine);
+                                    
+                                    // Bottom-back corner of current square to bottom-forward corner of back neighbor
+                                    const bottomLineGeometry = new THREE.BufferGeometry().setFromPoints([
+                                        new THREE.Vector3(worldX, topHeight, worldZ),
+                                        new THREE.Vector3(worldX, backHeight, worldZ)
+                                    ]);
+                                    const bottomLine = new THREE.Line(bottomLineGeometry, wireframeMaterial);
+                                    heightMapGroup.add(bottomLine);
+                                }
+                            }
+                            
                         }
                     }
                     
@@ -1328,10 +1486,11 @@
                 updateStatus();
             }, 50);
             
-            // Update height map visualization every 2 seconds (less frequent)
+            // Update height map visualization periodically
+            // Will only actually update if player has moved significantly
             setInterval(() => {
                 updateHeightMapVisualization();
-            }, 2000);
+            }, 1000);
         });
     </script>
 </body>
