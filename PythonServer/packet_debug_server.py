@@ -29,6 +29,7 @@ from .minecraft_protocol import (
 import uuid
 import time
 import threading
+import threading
 import math
 import random
 from .web_server import run_web_server
@@ -237,6 +238,15 @@ class ChunkLoader:
                 
                 # Thread-safe socket send
                 with self.socket_lock:
+                    # Log clientbound packet (ChunkLoader only runs in PLAY state)
+                    log_packet_to_file(
+                        direction="clientbound",
+                        connection_state=ConnectionState.PLAY,
+                        packet_id=0x2C,  # Chunk Data and Update Light packet ID
+                        packet_data=chunk_data,
+                        parsed_data={"chunk_x": chunk_x, "chunk_z": chunk_z},
+                        packet_name=f"Chunk Data ({chunk_x}, {chunk_z})"
+                    )
                     self.client_socket.sendall(chunk_data)
                 
                 self.player.mark_chunk_loaded(chunk_x, chunk_z)
@@ -255,6 +265,15 @@ class ChunkLoader:
                     chunk_z=center_chunk[1]
                 )
                 with self.socket_lock:
+                    # Log clientbound packet (ChunkLoader only runs in PLAY state)
+                    log_packet_to_file(
+                        direction="clientbound",
+                        connection_state=ConnectionState.PLAY,
+                        packet_id=0x4B,  # Set Center Chunk packet ID
+                        packet_data=center_chunk_packet,
+                        parsed_data={"chunk_x": center_chunk[0], "chunk_z": center_chunk[1]},
+                        packet_name="Set Center Chunk"
+                    )
                     self.client_socket.sendall(center_chunk_packet)
                 print(f"  │  ✓ [Chunk Loader] Set Center Chunk sent after loading chunks")
             except Exception as e:
@@ -1158,7 +1177,7 @@ def load_loot_tables():
         
         if not os.path.exists(loot_mappings_file):
             print(f"  │  ⚠ Warning: Loot table mappings not found at {loot_mappings_file}")
-            print(f"  │  Run src/extract_server_data.py to generate extracted data")
+            print(f"  │  Run extract_server_data.py to generate extracted data")
         else:
             try:
                 with open(loot_mappings_file, 'r') as f:
@@ -1372,6 +1391,167 @@ def get_item_id_for_block(block_state_id: int) -> int:
     return None
 
 
+# Global lock for packet log file access
+_packet_log_lock = threading.Lock()
+_packet_log_file = None
+
+def log_and_send_packet(
+    client_socket: socket.socket,
+    connection_state: ConnectionState,
+    packet_id: int,
+    packet_data: bytes,
+    parsed_data: Optional[any] = None,
+    packet_name: Optional[str] = None,
+    direction: str = "clientbound"
+):
+    """
+    Log a packet and send it to the client.
+    Helper function to ensure all packets are logged.
+    """
+    log_packet_to_file(
+        direction=direction,
+        connection_state=connection_state,
+        packet_id=packet_id,
+        packet_data=packet_data,
+        parsed_data=parsed_data,
+        packet_name=packet_name
+    )
+    client_socket.sendall(packet_data)
+
+
+def log_packet_to_file(
+    direction: str,  # "serverbound" or "clientbound"
+    connection_state: ConnectionState,
+    packet_id: Optional[int],
+    packet_data: bytes,
+    parsed_data: Optional[any] = None,
+    packet_name: Optional[str] = None
+):
+    """
+    Log a packet to a JSON file for test case generation.
+    Logs all packets including PLAY state.
+    
+    Args:
+        direction: "serverbound" (from client) or "clientbound" (to client)
+        connection_state: Current connection state
+        packet_id: Packet ID (None if unknown)
+        packet_data: Raw packet bytes (including length prefix)
+        parsed_data: Parsed packet object (optional)
+        packet_name: Human-readable packet name (optional)
+    """
+    
+    global _packet_log_file
+    
+    # Initialize log file on first use
+    if _packet_log_file is None:
+        script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        log_dir = os.path.join(script_dir, 'packet_logs')
+        os.makedirs(log_dir, exist_ok=True)
+        
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        _packet_log_file = os.path.join(log_dir, f'pre_play_packets_{timestamp}.json')
+        
+        # Initialize file with empty array
+        with open(_packet_log_file, 'w') as f:
+            json.dump([], f)
+    
+    # Format packet data
+    # Omit hex data for Chunk Data packets (they're very large)
+    is_chunk_data = (
+        (packet_id == 0x2C and connection_state == ConnectionState.PLAY) or
+        (packet_name and "Chunk Data" in packet_name)
+    )
+    
+    packet_entry = {
+        'timestamp': datetime.now().isoformat(),
+        'direction': direction,
+        'state': connection_state.name,
+        'packet_id': packet_id,
+        'packet_id_hex': f'0x{packet_id:02x}' if packet_id is not None else None,
+        'packet_name': packet_name,
+        'packet_length': len(packet_data),
+        'packet_data_hex': None if is_chunk_data else packet_data.hex(),
+        'packet_data_base64': None,  # Can add if needed
+    }
+    
+    if is_chunk_data:
+        packet_entry['packet_data_hex_omitted'] = True
+        packet_entry['packet_data_hex_note'] = 'Omitted due to large size'
+    
+    # Add parsed data if available
+    if parsed_data is not None:
+        if isinstance(parsed_data, (HandshakePacket, LoginStartPacket, ClientInformationPacket)):
+            # Convert dataclass to dict, handling bytes and other non-serializable types
+            packet_entry['parsed_data'] = {}
+            for k, v in parsed_data.__dict__.items():
+                if isinstance(v, bytes):
+                    packet_entry['parsed_data'][k] = v.hex()
+                elif isinstance(v, uuid.UUID):
+                    packet_entry['parsed_data'][k] = str(v)
+                elif isinstance(v, (int, float, bool, str, type(None))):
+                    packet_entry['parsed_data'][k] = v
+                else:
+                    packet_entry['parsed_data'][k] = str(v)
+        elif isinstance(parsed_data, dict):
+            # Convert dict, handling bytes and other non-serializable types
+            packet_entry['parsed_data'] = {}
+            for k, v in parsed_data.items():
+                if isinstance(v, bytes):
+                    packet_entry['parsed_data'][k] = v.hex()
+                elif isinstance(v, uuid.UUID):
+                    packet_entry['parsed_data'][k] = str(v)
+                elif isinstance(v, (int, float, bool, str, type(None))):
+                    packet_entry['parsed_data'][k] = v
+                else:
+                    packet_entry['parsed_data'][k] = str(v)
+        elif isinstance(parsed_data, list):
+            # Convert list, handling bytes and other non-serializable types
+            packet_entry['parsed_data'] = []
+            for item in parsed_data:
+                if isinstance(item, bytes):
+                    packet_entry['parsed_data'].append(item.hex())
+                elif isinstance(item, uuid.UUID):
+                    packet_entry['parsed_data'].append(str(item))
+                elif isinstance(item, (int, float, bool, str, type(None))):
+                    packet_entry['parsed_data'].append(item)
+                elif isinstance(item, tuple):
+                    # Handle tuples (like in Known Packs)
+                    packet_entry['parsed_data'].append(list(item))
+                else:
+                    packet_entry['parsed_data'].append(str(item))
+        elif parsed_data is None:
+            packet_entry['parsed_data'] = None
+        else:
+            packet_entry['parsed_data'] = str(parsed_data)
+    
+    # Append to log file (thread-safe)
+    with _packet_log_lock:
+        try:
+            # Try to read existing packets, or start with empty list if file is corrupted
+            packets = []
+            if os.path.exists(_packet_log_file):
+                try:
+                    with open(_packet_log_file, 'r') as f:
+                        packets = json.load(f)
+                except (json.JSONDecodeError, ValueError):
+                    # File is corrupted, start fresh
+                    packets = []
+            
+            packets.append(packet_entry)
+            
+            # Write to a temporary file first, then rename (atomic write)
+            temp_file = _packet_log_file + '.tmp'
+            with open(temp_file, 'w') as f:
+                json.dump(packets, f, indent=2)
+            
+            # Atomic rename
+            os.replace(temp_file, _packet_log_file)
+        except Exception as e:
+            print(f"  │  ⚠ Warning: Could not log packet to file: {e}")
+            import traceback
+            traceback.print_exc()
+
+
 def handle_client(client_socket, client_address):
     """Handle a single client connection."""
     print(f"\n{'='*60}")
@@ -1460,6 +1640,61 @@ def handle_client(client_socket, client_address):
                             full_packet, connection_state
                         )
                         
+                        # Log serverbound packet (from client) - all states including PLAY
+                        # Log regardless of whether parsed_packet is None (some packets like Login Acknowledged return None)
+                        packet_name = None
+                        if isinstance(parsed_packet, HandshakePacket):
+                            packet_name = "Handshake"
+                        elif isinstance(parsed_packet, LoginStartPacket):
+                            packet_name = "Login Start"
+                        elif isinstance(parsed_packet, ClientInformationPacket):
+                            packet_name = "Client Information"
+                        elif connection_state == ConnectionState.CONFIGURATION and parsed_packet_id == 2:
+                            packet_name = "Plugin Message"
+                        elif connection_state == ConnectionState.CONFIGURATION and parsed_packet_id == 0x07:
+                            packet_name = "Serverbound Known Packs"
+                        elif connection_state == ConnectionState.LOGIN and parsed_packet_id == 3:
+                            packet_name = "Login Acknowledged"
+                        elif connection_state == ConnectionState.CONFIGURATION and parsed_packet_id == 3:
+                            packet_name = "Acknowledge Finish Configuration"
+                        elif connection_state == ConnectionState.PLAY:
+                            # PLAY state packet names
+                            if parsed_packet_id == 0x1D:
+                                packet_name = "Set Player Position"
+                            elif parsed_packet_id == 0x1E:
+                                packet_name = "Set Player Position and Rotation"
+                            elif parsed_packet_id == 0x1F:
+                                packet_name = "Set Player Rotation"
+                            elif parsed_packet_id == 0x1B:
+                                packet_name = "Keep Alive Response"
+                            elif parsed_packet_id == 0x28:
+                                packet_name = "Player Action"
+                            elif parsed_packet_id == 0x2E:
+                                packet_name = "Use Item"
+                            elif parsed_packet_id == 0x2F:
+                                packet_name = "Swing Arm"
+                            elif parsed_packet_id == 0x3F:
+                                packet_name = "Use Item On"
+                            elif parsed_packet_id == 0x34:
+                                packet_name = "Set Held Item"
+                            elif parsed_packet_id == 0x11:
+                                packet_name = "Click Container"
+                            elif parsed_packet_id == 0x0C:
+                                packet_name = "Pong"
+                            elif parsed_packet_id == 0x00:
+                                packet_name = "Confirm Teleport"
+                            else:
+                                packet_name = f"PLAY Packet 0x{parsed_packet_id:02x}"
+                        
+                        log_packet_to_file(
+                            direction="serverbound",
+                            connection_state=connection_state,
+                            packet_id=parsed_packet_id,
+                            packet_data=full_packet,
+                            parsed_data=parsed_packet,
+                            packet_name=packet_name
+                        )
+                        
                         if parsed_packet is not None:
                             print(f"  ┌─ Parsed Packet Data:")
                             
@@ -1497,6 +1732,23 @@ def handle_client(client_socket, client_address):
                                         properties=[]  # Empty for offline mode
                                     )
                                     login_success = PacketBuilder.build_login_success(profile)
+                                    
+                                    # Log clientbound packet
+                                    log_packet_to_file(
+                                        direction="clientbound",
+                                        connection_state=connection_state,
+                                        packet_id=0x02,  # Login Success packet ID
+                                        packet_data=login_success,
+                                        parsed_data={
+                                            "profile": {
+                                                "uuid": str(profile.uuid),
+                                                "username": profile.username,
+                                                "properties": []
+                                            }
+                                        },
+                                        packet_name="Login Success"
+                                    )
+                                    
                                     client_socket.send(login_success)
                                     print(f"  │  ✓ Login Success sent ({len(login_success)} bytes)")
                                     print(f"  │  → Waiting for Login Acknowledged...")
@@ -1518,6 +1770,18 @@ def handle_client(client_socket, client_address):
                                         known_packs = PacketBuilder.build_known_packs([
                                             ("minecraft", "core", "1.21.10")
                                         ])
+                                        
+                                        # Log clientbound packet - convert tuples to lists for JSON
+                                        known_packs_list = [["minecraft", "core", "1.21.10"]]
+                                        log_packet_to_file(
+                                            direction="clientbound",
+                                            connection_state=connection_state,
+                                            packet_id=0x05,  # Known Packs packet ID
+                                            packet_data=known_packs,
+                                            parsed_data=known_packs_list,
+                                            packet_name="Known Packs"
+                                        )
+                                        
                                         client_socket.send(known_packs)
                                         known_packs_sent = True
                                         print(f"  │  ✓ Known Packs sent ({len(known_packs)} bytes)")
@@ -1656,6 +1920,23 @@ def handle_client(client_socket, client_address):
                                             registry_id=registry_id,
                                             entries=entries
                                         )
+                                        
+                                        # Log clientbound packet with full entries data
+                                        # Convert entries tuples to lists for JSON serialization
+                                        entries_list = [[entry_name, nbt_data] if nbt_data is not None else [entry_name] for entry_name, nbt_data in entries]
+                                        log_packet_to_file(
+                                            direction="clientbound",
+                                            connection_state=connection_state,
+                                            packet_id=0x05,  # Registry Data packet ID
+                                            packet_data=registry_data,
+                                            parsed_data={
+                                                "registry_id": registry_id,
+                                                "entry_count": len(entries),
+                                                "entries": entries_list
+                                            },
+                                            packet_name=f"Registry Data ({registry_id})"
+                                        )
+                                        
                                         client_socket.send(registry_data)
                                         print(f"  │  ✓ {registry_id}: {len(entries)} entry(ies) ({len(registry_data)} bytes)")
                                     except Exception as send_error:
@@ -1667,6 +1948,17 @@ def handle_client(client_socket, client_address):
                                 print(f"  │  → Sending Finish Configuration...")
                                 try:
                                     finish_config = PacketBuilder.build_finish_configuration()
+                                    
+                                    # Log clientbound packet
+                                    log_packet_to_file(
+                                        direction="clientbound",
+                                        connection_state=connection_state,
+                                        packet_id=0x03,  # Finish Configuration packet ID
+                                        packet_data=finish_config,
+                                        parsed_data=None,
+                                        packet_name="Finish Configuration"
+                                    )
+                                    
                                     client_socket.send(finish_config)
                                     print(f"  │  ✓ Finish Configuration sent ({len(finish_config)} bytes)")
                                     print(f"  │  → Waiting for Acknowledge Finish Configuration...")
@@ -1843,6 +2135,20 @@ def handle_client(client_socket, client_address):
                                                             item_id=item_id if new_count > 0 else 0,
                                                             count=new_count
                                                         )
+                                                        log_packet_to_file(
+                                                            direction="clientbound",
+                                                            connection_state=connection_state,
+                                                            packet_id=0x16,  # Set Container Slot packet ID
+                                                            packet_data=container_slot_packet,
+                                                            parsed_data={
+                                                                "window_id": 0,
+                                                                "state_id": player.inventory_state_id,
+                                                                "slot": slot_idx,
+                                                                "item_id": item_id if new_count > 0 else 0,
+                                                                "count": new_count
+                                                            },
+                                                            packet_name="Set Container Slot"
+                                                        )
                                                         client_socket.sendall(container_slot_packet)
                                                         
                                                         # Spawn item entity in the world
@@ -1885,6 +2191,20 @@ def handle_client(client_socket, client_address):
                                                                 is_living_entity=True,  # Required for item entities (protocol quirk)
                                                                 has_data_field=True
                                                             )
+                                                            log_packet_to_file(
+                                                                direction="clientbound",
+                                                                connection_state=connection_state,
+                                                                packet_id=0x01,  # Spawn Entity packet ID
+                                                                packet_data=spawn_packet,
+                                                                parsed_data={
+                                                                    "entity_id": entity_id,
+                                                                    "entity_type": item_entity_type_id,
+                                                                    "x": spawn_x,
+                                                                    "y": spawn_y,
+                                                                    "z": spawn_z
+                                                                },
+                                                                packet_name="Spawn Entity"
+                                                            )
                                                             client_socket.sendall(spawn_packet)
                                                             
                                                             # Send Entity Metadata to set the item stack
@@ -1893,6 +2213,17 @@ def handle_client(client_socket, client_address):
                                                                 metadata=[
                                                                     (8, 7, (item_id, drop_count))  # Index 8, type 7 (Slot), (item_id, count)
                                                                 ]
+                                                            )
+                                                            log_packet_to_file(
+                                                                direction="clientbound",
+                                                                connection_state=connection_state,
+                                                                packet_id=0x52,  # Set Entity Metadata packet ID
+                                                                packet_data=metadata_packet,
+                                                                parsed_data={
+                                                                    "entity_id": entity_id,
+                                                                    "metadata": [[8, 7, [item_id, drop_count]]]
+                                                                },
+                                                                packet_name="Set Entity Metadata"
                                                             )
                                                             client_socket.sendall(metadata_packet)
                                                             
@@ -1955,6 +2286,14 @@ def handle_client(client_socket, client_address):
                                                     y=y,
                                                     z=z,
                                                     block_state_id=0  # Air
+                                                )
+                                                log_packet_to_file(
+                                                    direction="clientbound",
+                                                    connection_state=connection_state,
+                                                    packet_id=0x09,  # Block Update packet ID
+                                                    packet_data=block_update,
+                                                    parsed_data={"x": x, "y": y, "z": z, "block_state_id": 0},
+                                                    packet_name="Block Update"
                                                 )
                                                 client_socket.sendall(block_update)
                                                 print(f"  │  ✓ Block Update sent (set to air)")
@@ -2028,6 +2367,20 @@ def handle_client(client_socket, client_address):
                                                         is_living_entity=True,  # Include Head Yaw (required for item entities despite not being living)
                                                         has_data_field=True  # Include Data field (will be 0)
                                                     )
+                                                    log_packet_to_file(
+                                                        direction="clientbound",
+                                                        connection_state=connection_state,
+                                                        packet_id=0x01,  # Spawn Entity packet ID
+                                                        packet_data=spawn_packet,
+                                                        parsed_data={
+                                                            "entity_id": entity_id,
+                                                            "entity_type": item_entity_type_id,
+                                                            "x": spawn_x,
+                                                            "y": spawn_y,
+                                                            "z": spawn_z
+                                                        },
+                                                        packet_name="Spawn Entity"
+                                                    )
                                                     client_socket.sendall(spawn_packet)
                                                     
                                                     # Send Entity Metadata to set the item stack
@@ -2037,6 +2390,17 @@ def handle_client(client_socket, client_address):
                                                         metadata=[
                                                             (8, 7, (item_id, 1))  # Index 8, type 7 (Slot), (item_id, count)
                                                         ]
+                                                    )
+                                                    log_packet_to_file(
+                                                        direction="clientbound",
+                                                        connection_state=connection_state,
+                                                        packet_id=0x52,  # Set Entity Metadata packet ID
+                                                        packet_data=metadata_packet,
+                                                        parsed_data={
+                                                            "entity_id": entity_id,
+                                                            "metadata": [[8, 7, [item_id, 1]]]
+                                                        },
+                                                        packet_name="Set Entity Metadata"
                                                     )
                                                     client_socket.sendall(metadata_packet)
                                                     
@@ -2222,6 +2586,20 @@ def handle_client(client_socket, client_address):
                                                         item_id=item_id if new_count > 0 else 0,
                                                         count=new_count
                                                     )
+                                                    log_packet_to_file(
+                                                        direction="clientbound",
+                                                        connection_state=connection_state,
+                                                        packet_id=0x16,  # Set Container Slot packet ID
+                                                        packet_data=container_slot_packet,
+                                                        parsed_data={
+                                                            "window_id": 0,
+                                                            "state_id": player.inventory_state_id,
+                                                            "slot": slot_number,
+                                                            "item_id": item_id if new_count > 0 else 0,
+                                                            "count": new_count
+                                                        },
+                                                        packet_name="Set Container Slot"
+                                                    )
                                                     client_socket.sendall(container_slot_packet)
                                                     
                                                     # Spawn item entity in the world
@@ -2264,6 +2642,20 @@ def handle_client(client_socket, client_address):
                                                             is_living_entity=True,  # Required for item entities (protocol quirk)
                                                             has_data_field=True
                                                         )
+                                                        log_packet_to_file(
+                                                            direction="clientbound",
+                                                            connection_state=connection_state,
+                                                            packet_id=0x01,  # Spawn Entity packet ID
+                                                            packet_data=spawn_packet,
+                                                            parsed_data={
+                                                                "entity_id": entity_id,
+                                                                "entity_type": item_entity_type_id,
+                                                                "x": spawn_x,
+                                                                "y": spawn_y,
+                                                                "z": spawn_z
+                                                            },
+                                                            packet_name="Spawn Entity"
+                                                        )
                                                         client_socket.sendall(spawn_packet)
                                                         
                                                         # Send Entity Metadata to set the item stack
@@ -2272,6 +2664,17 @@ def handle_client(client_socket, client_address):
                                                             metadata=[
                                                                 (8, 7, (item_id, drop_count))  # Index 8, type 7 (Slot), (item_id, count)
                                                             ]
+                                                        )
+                                                        log_packet_to_file(
+                                                            direction="clientbound",
+                                                            connection_state=connection_state,
+                                                            packet_id=0x52,  # Set Entity Metadata packet ID
+                                                            packet_data=metadata_packet,
+                                                            parsed_data={
+                                                                "entity_id": entity_id,
+                                                                "metadata": [[8, 7, [item_id, drop_count]]]
+                                                            },
+                                                            packet_name="Set Entity Metadata"
                                                         )
                                                         client_socket.sendall(metadata_packet)
                                                         
@@ -2380,6 +2783,20 @@ def handle_client(client_socket, client_address):
                                                         item_id=item_id if new_count > 0 else 0,
                                                         count=new_count
                                                     )
+                                                    log_packet_to_file(
+                                                        direction="clientbound",
+                                                        connection_state=connection_state,
+                                                        packet_id=0x16,  # Set Container Slot packet ID
+                                                        packet_data=container_slot_packet,
+                                                        parsed_data={
+                                                            "window_id": 0,
+                                                            "state_id": player.inventory_state_id,
+                                                            "slot": slot_idx,
+                                                            "item_id": item_id if new_count > 0 else 0,
+                                                            "count": new_count
+                                                        },
+                                                        packet_name="Set Container Slot"
+                                                    )
                                                     client_socket.sendall(container_slot_packet)
                                                     
                                                     # Calculate block placement position (adjacent to clicked face)
@@ -2417,6 +2834,19 @@ def handle_client(client_socket, client_address):
                                                             y=place_y,
                                                             z=place_z,
                                                             block_state_id=block_state_id
+                                                        )
+                                                        log_packet_to_file(
+                                                            direction="clientbound",
+                                                            connection_state=connection_state,
+                                                            packet_id=0x09,  # Block Update packet ID
+                                                            packet_data=block_update,
+                                                            parsed_data={
+                                                                "x": place_x,
+                                                                "y": place_y,
+                                                                "z": place_z,
+                                                                "block_state_id": block_state_id
+                                                            },
+                                                            packet_name="Block Update"
                                                         )
                                                         client_socket.sendall(block_update)
                                                         print(f"  │  ✓ Block placed at ({place_x}, {place_y}, {place_z})")
@@ -2565,12 +2995,20 @@ def handle_client(client_socket, client_address):
                             if connection_state == ConnectionState.LOGIN and parsed_packet_id == 3:
                                 print(f"  ┌─ Parsed Packet Data:")
                                 print(f"  │  Type: Login Acknowledged")
+                                
+                                # Log serverbound packet (already logged above, but ensure it's captured)
+                                # The packet was already logged in the main parsing section
+                                
                                 print(f"  │  → Login complete! Transitioning to CONFIGURATION state")
                                 connection_state = ConnectionState.CONFIGURATION
                                 print(f"  └─")
                             elif connection_state == ConnectionState.CONFIGURATION and parsed_packet_id == 3:
                                 print(f"  ┌─ Parsed Packet Data:")
                                 print(f"  │  Type: Acknowledge Finish Configuration")
+                                
+                                # Log serverbound packet (already logged above, but ensure it's captured)
+                                # The packet was already logged in the main parsing section
+                                
                                 print(f"  │  → Configuration complete! Transitioning to PLAY state")
                                 connection_state = ConnectionState.PLAY
                                 
@@ -2629,6 +3067,24 @@ def handle_client(client_socket, client_address):
                                             pitch=0.0,
                                             teleport_id=0
                                         )
+                                        
+                                        # Log clientbound packet
+                                        log_packet_to_file(
+                                            direction="clientbound",
+                                            connection_state=connection_state,
+                                            packet_id=0x3E,  # Synchronize Player Position packet ID
+                                            packet_data=player_pos,
+                                            parsed_data={
+                                                "x": 0.0,
+                                                "y": 65.0,
+                                                "z": 0.0,
+                                                "yaw": 0.0,
+                                                "pitch": 0.0,
+                                                "teleport_id": 0
+                                            },
+                                            packet_name="Synchronize Player Position"
+                                        )
+                                        
                                         client_socket.sendall(player_pos)
                                         print(f"  │  ✓ Player Position sent ({len(player_pos)} bytes)")
                                     except Exception as pos_error:
@@ -2644,6 +3100,21 @@ def handle_client(client_socket, client_address):
                                             time_of_day=6000,  # Noon
                                             time_increasing=True
                                         )
+                                        
+                                        # Log clientbound packet
+                                        log_packet_to_file(
+                                            direction="clientbound",
+                                            connection_state=connection_state,
+                                            packet_id=0x5E,  # Update Time packet ID
+                                            packet_data=update_time,
+                                            parsed_data={
+                                                "world_age": 0,
+                                                "time_of_day": 6000,
+                                                "time_increasing": True
+                                            },
+                                            packet_name="Update Time"
+                                        )
+                                        
                                         client_socket.sendall(update_time)
                                         print(f"  │  ✓ Update Time sent ({len(update_time)} bytes)")
                                     except Exception as time_error:
@@ -2659,6 +3130,20 @@ def handle_client(client_socket, client_address):
                                             event=13,  # Start waiting for level chunks
                                             value=0.0
                                         )
+                                        
+                                        # Log clientbound packet
+                                        log_packet_to_file(
+                                            direction="clientbound",
+                                            connection_state=connection_state,
+                                            packet_id=0x1C,  # Game Event packet ID
+                                            packet_data=game_event,
+                                            parsed_data={
+                                                "event": 13,
+                                                "value": 0.0
+                                            },
+                                            packet_name="Game Event"
+                                        )
+                                        
                                         client_socket.sendall(game_event)
                                         print(f"  │  ✓ Game Event sent ({len(game_event)} bytes)")
                                     except Exception as event_error:
@@ -2673,6 +3158,20 @@ def handle_client(client_socket, client_address):
                                             chunk_x=0,
                                             chunk_z=0
                                         )
+                                        
+                                        # Log clientbound packet
+                                        log_packet_to_file(
+                                            direction="clientbound",
+                                            connection_state=connection_state,
+                                            packet_id=0x4B,  # Set Center Chunk packet ID
+                                            packet_data=center_chunk,
+                                            parsed_data={
+                                                "chunk_x": 0,
+                                                "chunk_z": 0
+                                            },
+                                            packet_name="Set Center Chunk"
+                                        )
+                                        
                                         client_socket.sendall(center_chunk)
                                         print(f"  │  ✓ Set Center Chunk sent ({len(center_chunk)} bytes)")
                                     except Exception as center_error:
@@ -2709,6 +3208,14 @@ def handle_client(client_socket, client_address):
                                                 last_keep_alive_id = keep_alive_id
                                                 
                                                 keep_alive_packet = PacketBuilder.build_keep_alive(keep_alive_id)
+                                                log_packet_to_file(
+                                                    direction="clientbound",
+                                                    connection_state=ConnectionState.PLAY,
+                                                    packet_id=0x24,  # Keep Alive packet ID
+                                                    packet_data=keep_alive_packet,
+                                                    parsed_data={"keep_alive_id": keep_alive_id},
+                                                    packet_name="Keep Alive"
+                                                )
                                                 client_socket.sendall(keep_alive_packet)
                                                 print(f"  │  → Keep Alive sent (ID: {keep_alive_id})")
                                                 
@@ -2782,7 +3289,7 @@ def initialize_server_data():
     # Check if extracted_data exists
     if not os.path.exists(extracted_data_dir):
         print(f"⚠ Warning: extracted_data/ directory not found at {extracted_data_dir}")
-        print(f"  Run src/extract_server_data.py to generate extracted data")
+        print(f"  Run extract_server_data.py to generate extracted data")
         print(f"  Some features may not work correctly.")
         return False
     

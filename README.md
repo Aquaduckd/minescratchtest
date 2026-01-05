@@ -16,7 +16,7 @@ A minimal Minecraft Java Edition server implementation built from scratch, imple
 minescratchtest/
 ├── server.py                   # Server entry point (run this to start the server)
 │
-├── src/                        # Source code
+├── PythonServer/              # Source code
 │   ├── __init__.py            # Package initialization
 │   ├── minecraft_protocol.py  # Core protocol implementation (data types, packet builders)
 │   ├── packet_debug_server.py # Main server implementation
@@ -61,7 +61,7 @@ python3 server.py
 
 Or alternatively:
 ```bash
-python3 -m src.packet_debug_server
+python3 -m PythonServer.packet_debug_server
 ```
 
 The server will:

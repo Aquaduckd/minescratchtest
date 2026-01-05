@@ -1,8 +1,12 @@
-logs/
-docs/
-output.txt
 __pycache__/
-versions/
-libraries/
 generated/
+libraries/
+versions/
+
+logs/
+packet_logs/
+output.txt
+
+docs/
+
 server-1-21-10.jar

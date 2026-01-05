@@ -31,7 +31,11 @@ def get_script_dir():
 
 def get_project_root():
     """Get the project root directory."""
-    return os.path.dirname(get_script_dir())
+    script_dir = get_script_dir()
+    # If script is in PythonServer/, go up one level. Otherwise, script is already in project root.
+    if os.path.basename(script_dir) == 'PythonServer':
+        return os.path.dirname(script_dir)
+    return script_dir
 
 def extract_inner_jar(jar_path: str, inner_jar_path: str) -> bool:
     """
