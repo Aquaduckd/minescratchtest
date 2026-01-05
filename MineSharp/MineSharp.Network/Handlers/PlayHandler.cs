@@ -103,7 +103,7 @@ public class PlayHandler
             var loginPlay = PacketBuilder.BuildLoginPlayPacket(
                 entityId: 1,
                 dimensionNames: new List<string> { "minecraft:overworld" },
-                gameMode: 0, // Survival
+                gameMode: 1, // Creative (0=Survival, 1=Creative, 2=Adventure, 3=Spectator)
                 dimensionName: "minecraft:overworld"
             );
             await connection.SendPacketAsync(loginPlay);

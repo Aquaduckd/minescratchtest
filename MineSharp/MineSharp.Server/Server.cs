@@ -1,5 +1,6 @@
 using MineSharp.Network;
 using MineSharp.Data;
+using MineSharp.World.Generation;
 using System.IO;
 
 namespace MineSharp.Server;
@@ -20,11 +21,45 @@ public class Server
         _configuration = configuration;
         _registryManager = new RegistryManager();
         _lootTableManager = new LootTableManager();
-        _world = new MineSharp.World.World(configuration.ViewDistance, configuration.UseTerrainGeneration);
+        
+        // Initialize terrain generator
+        var generator = InitializeTerrainGenerator();
+        _world = new MineSharp.World.World(configuration.ViewDistance, generator);
         
         // Create packet handler with registry manager and world
         var packetHandler = CreatePacketHandler();
         _tcpServer = new TcpServer(configuration.Port, packetHandler);
+    }
+    
+    private ITerrainGenerator InitializeTerrainGenerator()
+    {
+        var registry = new TerrainGeneratorRegistry();
+        
+        // Get generator ID from configuration (default to "noise")
+        var generatorId = _configuration.TerrainGeneratorId ?? "noise";
+        
+        // Validate generator ID
+        if (!registry.IsRegistered(generatorId))
+        {
+            Console.WriteLine($"Warning: Unknown generator ID '{generatorId}'. Falling back to 'noise'.");
+            generatorId = "noise";
+        }
+        
+        // Get generator instance
+        var generator = registry.GetGenerator(generatorId);
+        
+        // Configure generator if configuration is provided
+        if (_configuration.TerrainGeneratorConfig != null)
+        {
+            generator.Configure(_configuration.TerrainGeneratorConfig);
+            Console.WriteLine($"Configured terrain generator '{generatorId}' with custom settings.");
+        }
+        else
+        {
+            Console.WriteLine($"Using terrain generator: {generator.DisplayName} (ID: {generator.GeneratorId})");
+        }
+        
+        return generator;
     }
 
     private PacketHandler CreatePacketHandler()

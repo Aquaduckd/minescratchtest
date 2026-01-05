@@ -1,4 +1,5 @@
 using MineSharp.Core.DataTypes;
+using MineSharp.World.Generation;
 using System.Collections.Concurrent;
 using System.Linq;
 
@@ -12,11 +13,27 @@ public class BlockManager
 {
     private readonly ConcurrentDictionary<(int X, int Z), Chunk> _chunks;
     private readonly bool _useTerrainGeneration;
+    private readonly ITerrainGenerator? _generator;
 
+    public BlockManager(ITerrainGenerator generator)
+    {
+        _chunks = new ConcurrentDictionary<(int X, int Z), Chunk>();
+        _generator = generator ?? throw new ArgumentNullException(nameof(generator));
+        _useTerrainGeneration = false; // Legacy flag, kept for compatibility
+    }
+
+    // Convenience constructor for default flat generator
+    public BlockManager() : this(new Generation.Generators.FlatWorldGenerator())
+    {
+    }
+
+    // Legacy constructor - kept for backward compatibility
     public BlockManager(bool useTerrainGeneration = false)
     {
         _chunks = new ConcurrentDictionary<(int X, int Z), Chunk>();
         _useTerrainGeneration = useTerrainGeneration;
+        // TODO: Remove this constructor once migration is complete
+        _generator = null;
     }
 
     public Block GetBlock(int x, int y, int z)
@@ -51,7 +68,17 @@ public class BlockManager
         return _chunks.GetOrAdd((chunkX, chunkZ), _ =>
         {
             var chunk = new Chunk(chunkX, chunkZ);
-            GenerateFlatWorldChunk(chunk);
+            
+            // Use generator if available, otherwise fall back to legacy method
+            if (_generator != null)
+            {
+                _generator.GenerateChunk(chunk, chunkX, chunkZ);
+            }
+            else
+            {
+                GenerateFlatWorldChunk(chunk);
+            }
+            
             return chunk;
         });
     }
@@ -180,6 +207,13 @@ public class BlockManager
     /// </summary>
     public int[] GenerateHeightmap(int chunkX, int chunkZ)
     {
+        // Use generator if available, otherwise fall back to legacy method
+        if (_generator != null)
+        {
+            return _generator.GenerateHeightmap(chunkX, chunkZ);
+        }
+        
+        // Legacy method
         var chunk = GetOrCreateChunk(chunkX, chunkZ);
         var heightmap = new int[256]; // 16x16 = 256 columns
         

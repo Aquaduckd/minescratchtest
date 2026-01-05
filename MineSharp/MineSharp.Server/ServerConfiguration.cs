@@ -1,3 +1,4 @@
+using MineSharp.World.Generation;
 using System.IO;
 
 namespace MineSharp.Server;
@@ -9,7 +10,20 @@ public class ServerConfiguration
 {
     public int Port { get; set; } = 25565;
     public int ViewDistance { get; set; } = 10;
+    
+    /// <summary>
+    /// Terrain generator ID (e.g., "flat", "noise", "void").
+    /// </summary>
+    public string TerrainGeneratorId { get; set; } = "noise";
+    
+    /// <summary>
+    /// Generator-specific configuration.
+    /// </summary>
+    public GeneratorConfig? TerrainGeneratorConfig { get; set; }
+    
+    // Legacy property - kept for backward compatibility
     public bool UseTerrainGeneration { get; set; } = false;
+    
     public string DataPath { get; set; } = GetDefaultDataPath();
 
     private static string GetDefaultDataPath()
