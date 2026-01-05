@@ -23,6 +23,8 @@ public class ClientConnection
     private readonly List<byte> _receiveBuffer = new();
     private readonly PacketHandler _packetHandler;
     private long? _lastKeepAliveId;
+    private Guid? _playerUuid;
+    private string? _username;
     private CancellationTokenSource? _keepAliveCancellationTokenSource;
     private Task? _keepAliveTask;
 
@@ -43,6 +45,18 @@ public class ClientConnection
     {
         get => _lastKeepAliveId;
         set => _lastKeepAliveId = value;
+    }
+    
+    public Guid? PlayerUuid
+    {
+        get => _playerUuid;
+        set => _playerUuid = value;
+    }
+    
+    public string? Username
+    {
+        get => _username;
+        set => _username = value;
     }
 
     public ClientConnection(TcpClient client, PacketHandler packetHandler)

@@ -17,26 +17,23 @@ public class PlayerManager
 
     public void AddPlayer(Player player)
     {
-        // TODO: Implement player addition
-        throw new NotImplementedException();
+        _players.TryAdd(player.Uuid, player);
     }
 
     public void RemovePlayer(Guid uuid)
     {
-        // TODO: Implement player removal
-        throw new NotImplementedException();
+        _players.TryRemove(uuid, out _);
     }
 
     public Player? GetPlayer(Guid uuid)
     {
-        // TODO: Implement player retrieval
-        throw new NotImplementedException();
+        _players.TryGetValue(uuid, out var player);
+        return player;
     }
 
     public List<Player> GetAllPlayers()
     {
-        // TODO: Implement get all players
-        throw new NotImplementedException();
+        return _players.Values.ToList();
     }
 }
 

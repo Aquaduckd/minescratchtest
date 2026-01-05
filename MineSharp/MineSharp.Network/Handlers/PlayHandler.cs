@@ -1,6 +1,7 @@
 using MineSharp.Core;
 using MineSharp.Core.Protocol;
 using MineSharp.Core.Protocol.PacketTypes;
+using MineSharp.Game;
 using System;
 using System.Collections.Generic;
 
@@ -21,61 +22,116 @@ public class PlayHandler
     {
         Console.WriteLine("  │  → Sending initial PLAY state packets...");
         
+        // Create player if not already created
+        if (connection.Player == null && connection.PlayerUuid.HasValue)
+        {
+            var player = new MineSharp.Game.Player(connection.PlayerUuid.Value, viewDistance: 10);
+            connection.Player = player;
+            
+            // Add player to world if available
+            if (_world != null)
+            {
+                _world.AddPlayer(player);
+                Console.WriteLine($"  │  ✓ Player created and added to world (UUID: {connection.PlayerUuid})");
+            }
+            else
+            {
+                Console.WriteLine($"  │  ✓ Player created (UUID: {connection.PlayerUuid})");
+            }
+        }
+        
         // Send Login (play) packet
         await SendLoginPlayPacketAsync(connection);
         
-        // Send Synchronize Player Position (spawn at 0, 65, 0)
-        await SendSynchronizePlayerPositionAsync(connection, 0.0, 65.0, 0.0, 0.0f, 0.0f, 0, 0);
+        // Update player position to spawn position BEFORE loading chunks
+        // This ensures chunk loading uses the correct position
+        if (connection.Player != null)
+        {
+            var spawnPosition = new MineSharp.Core.DataTypes.Vector3(0.0f, 65.0f, 0.0f);
+            connection.Player.UpdatePosition(spawnPosition);
+        }
         
         // Send Update Time
         await SendUpdateTimeAsync(connection, 0, 6000, true);
         
         // Send Game Event (event 13: "Start waiting for level chunks")
+        // This tells the client to wait for chunks before rendering
         await SendGameEventAsync(connection, 13, 0.0f);
         
         // Send Set Center Chunk (spawn chunk at 0, 0)
         await SendSetCenterChunkAsync(connection, 0, 0);
         
-        // Send initial chunks around spawn (0, 0)
-        if (_world != null)
+        // Send a 3x3 grid of chunks around spawn FIRST (9 chunks total)
+        // This ensures immediate ground exists when player spawns
+        if (_world != null && connection.Player != null)
         {
+            await SendSpawnChunksAsync(connection, connection.Player);
+        }
+        
+        // Send Synchronize Player Position (spawn at 0, 65, 0) AFTER spawn chunks are loaded
+        // This ensures the player spawns on solid ground without waiting for all chunks
+        await SendSynchronizePlayerPositionAsync(connection, 0.0, 65.0, 0.0, 0.0f, 0.0f, 0, 0);
+        
+        // Now load the rest of the chunks in the view distance (async, doesn't block)
+        if (_world != null && connection.Player != null)
+        {
+            // Continue loading remaining chunks
             await SendInitialChunksAsync(connection);
         }
         
         Console.WriteLine("  └─");
     }
 
-    public async Task SendInitialChunksAsync(ClientConnection connection)
+    /// <summary>
+    /// Sends a 3x3 grid of chunks around spawn for immediate ground rendering.
+    /// </summary>
+    public async Task SendSpawnChunksAsync(ClientConnection connection, Player player)
     {
         if (_world == null) return;
         
-        Console.WriteLine("  │  → Sending initial chunks around spawn...");
+        Console.WriteLine("  │  → Sending spawn chunks (3x3 grid)...");
         
-        // Get chunks in range around spawn (chunk 0, 0)
-        var chunksToLoad = _world.ChunkManager.GetChunksInRange(0, 0);
-        
-        Console.WriteLine($"  │  → Loading {chunksToLoad.Count} chunks...");
+        const int spawnChunkX = 0;
+        const int spawnChunkZ = 0;
+        const int radius = 1; // 3x3 grid: -1 to +1 = 3 chunks per axis
         
         int chunksSent = 0;
-        foreach (var (chunkX, chunkZ) in chunksToLoad)
+        for (int x = -radius; x <= radius; x++)
         {
-            try
+            for (int z = -radius; z <= radius; z++)
             {
-                await SendChunkDataAsync(connection, chunkX, chunkZ);
-                chunksSent++;
+                int chunkX = spawnChunkX + x;
+                int chunkZ = spawnChunkZ + z;
                 
-                if (chunksSent <= 10 || chunksSent % 10 == 0)
+                try
                 {
-                    Console.WriteLine($"  │  ✓ Chunk ({chunkX}, {chunkZ}) sent ({chunksSent}/{chunksToLoad.Count})");
+                    await SendChunkDataAsync(connection, chunkX, chunkZ);
+                    player.MarkChunkLoaded(chunkX, chunkZ);
+                    chunksSent++;
                 }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"  │  ✗ Error sending chunk ({chunkX}, {chunkZ}): {ex.Message}");
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"  │  ✗ Error sending spawn chunk ({chunkX}, {chunkZ}): {ex.Message}");
+                }
             }
         }
         
-        Console.WriteLine($"  │  ✓ Sent {chunksSent} chunks");
+        Console.WriteLine($"  │  ✓ Spawn chunks sent ({chunksSent} chunks)");
+    }
+
+    public async Task SendInitialChunksAsync(ClientConnection connection)
+    {
+        if (_world == null || connection.Player == null) return;
+        
+        var player = connection.Player;
+        
+        Console.WriteLine("  │  → Sending remaining chunks around spawn...");
+        
+        // Use the new UpdatePlayerChunksAsync method to load remaining chunks
+        // This will handle loading chunks that aren't already loaded, marking as loaded, and updating center chunk
+        await UpdatePlayerChunksAsync(connection, player);
+        
+        Console.WriteLine($"  │  ✓ All chunks loaded ({player.LoadedChunks.Count} total)");
     }
 
     public async Task SendChunkDataAsync(ClientConnection connection, int chunkX, int chunkZ)
@@ -186,14 +242,61 @@ public class PlayHandler
 
     public async Task HandleSetPlayerPositionAsync(ClientConnection connection, SetPlayerPositionPacket packet)
     {
-        // TODO: Implement set player position handling
-        throw new NotImplementedException();
+        Console.WriteLine($"  │  ← Received Set Player Position: ({packet.X:F2}, {packet.Y:F2}, {packet.Z:F2})");
+        
+        var player = connection.Player;
+        if (player == null)
+        {
+            Console.WriteLine($"  │  ⚠ Warning: Received position update but player is not set");
+            return;
+        }
+        
+        // Update player position
+        var newPosition = new MineSharp.Core.DataTypes.Vector3((float)packet.X, (float)packet.Y, (float)packet.Z);
+        var chunkChange = player.UpdatePosition(newPosition);
+        
+        // Handle chunk boundary crossing
+        if (chunkChange.HasValue)
+        {
+            var (oldChunkX, oldChunkZ, newChunkX, newChunkZ) = chunkChange.Value;
+            Console.WriteLine($"  │  → Chunk boundary crossed: ({oldChunkX}, {oldChunkZ}) → ({newChunkX}, {newChunkZ})");
+            
+            // Trigger chunk loading/unloading
+            await UpdatePlayerChunksAsync(connection, player);
+        }
+        
+        await Task.CompletedTask;
     }
 
     public async Task HandleSetPlayerPositionAndRotationAsync(ClientConnection connection, SetPlayerPositionAndRotationPacket packet)
     {
-        // TODO: Implement set player position and rotation handling
-        throw new NotImplementedException();
+        Console.WriteLine($"  │  ← Received Set Player Position and Rotation: ({packet.X:F2}, {packet.Y:F2}, {packet.Z:F2}), Yaw: {packet.Yaw:F2}, Pitch: {packet.Pitch:F2}");
+        
+        var player = connection.Player;
+        if (player == null)
+        {
+            Console.WriteLine($"  │  ⚠ Warning: Received position/rotation update but player is not set");
+            return;
+        }
+        
+        // Update player position
+        var newPosition = new MineSharp.Core.DataTypes.Vector3((float)packet.X, (float)packet.Y, (float)packet.Z);
+        var chunkChange = player.UpdatePosition(newPosition);
+        
+        // Update player rotation
+        player.UpdateRotation(packet.Yaw, packet.Pitch);
+        
+        // Handle chunk boundary crossing
+        if (chunkChange.HasValue)
+        {
+            var (oldChunkX, oldChunkZ, newChunkX, newChunkZ) = chunkChange.Value;
+            Console.WriteLine($"  │  → Chunk boundary crossed: ({oldChunkX}, {oldChunkZ}) → ({newChunkX}, {newChunkZ})");
+            
+            // Trigger chunk loading/unloading
+            await UpdatePlayerChunksAsync(connection, player);
+        }
+        
+        await Task.CompletedTask;
     }
 
     public async Task HandleSetPlayerRotationAsync(ClientConnection connection, SetPlayerRotationPacket packet)
@@ -248,6 +351,58 @@ public class PlayHandler
         {
             Console.WriteLine($"  │  ✗ Error sending Keep Alive: {ex.Message}");
             throw;
+        }
+    }
+
+    /// <summary>
+    /// Updates player's loaded chunks by loading new chunks and unloading distant ones.
+    /// Maintains a square region of chunks around the player based on view distance.
+    /// </summary>
+    public async Task UpdatePlayerChunksAsync(ClientConnection connection, Player player)
+    {
+        if (_world == null) return;
+        
+        var chunkManager = _world.ChunkManager;
+        
+        // Get chunks that need to be loaded
+        var chunksToLoad = chunkManager.GetChunksToLoad(player.LoadedChunks, player.ChunkX, player.ChunkZ);
+        
+        // Get chunks that should be unloaded
+        var chunksToUnload = chunkManager.GetChunksToUnload(player.LoadedChunks, player.ChunkX, player.ChunkZ);
+        
+        // Load new chunks
+        if (chunksToLoad.Count > 0)
+        {
+            Console.WriteLine($"  │  → Loading {chunksToLoad.Count} new chunk(s)...");
+            
+            foreach (var (chunkX, chunkZ) in chunksToLoad)
+            {
+                try
+                {
+                    await SendChunkDataAsync(connection, chunkX, chunkZ);
+                    player.MarkChunkLoaded(chunkX, chunkZ);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"  │  ✗ Error loading chunk ({chunkX}, {chunkZ}): {ex.Message}");
+                }
+            }
+            
+            // Update center chunk to player's current chunk
+            await SendSetCenterChunkAsync(connection, player.ChunkX, player.ChunkZ);
+        }
+        
+        // Unload distant chunks
+        if (chunksToUnload.Count > 0)
+        {
+            Console.WriteLine($"  │  → Unloading {chunksToUnload.Count} distant chunk(s)...");
+            
+            foreach (var (chunkX, chunkZ) in chunksToUnload)
+            {
+                player.MarkChunkUnloaded(chunkX, chunkZ);
+                // Note: Minecraft client automatically unloads chunks outside view distance
+                // We track it server-side for our own state management
+            }
         }
     }
 }

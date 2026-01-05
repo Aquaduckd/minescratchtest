@@ -33,15 +33,52 @@ public class Player
 
     public (int oldChunkX, int oldChunkZ, int newChunkX, int newChunkZ)? UpdatePosition(Vector3 newPosition)
     {
-        // TODO: Implement position update with chunk boundary detection
-        throw new NotImplementedException();
+        // Store old chunk coordinates
+        var oldChunkX = ChunkX;
+        var oldChunkZ = ChunkZ;
+        
+        // Update position
+        Position = newPosition;
+        
+        // Calculate new chunk coordinates (floor division by 16)
+        var newChunkX = (int)Math.Floor(newPosition.X / 16.0);
+        var newChunkZ = (int)Math.Floor(newPosition.Z / 16.0);
+        
+        // Update chunk coordinates
+        ChunkX = newChunkX;
+        ChunkZ = newChunkZ;
+        
+        // Check if chunk boundary was crossed
+        if (oldChunkX != newChunkX || oldChunkZ != newChunkZ)
+        {
+            return (oldChunkX, oldChunkZ, newChunkX, newChunkZ);
+        }
+        
+        return null;
     }
 
     public void UpdateRotation(float yaw, float pitch)
     {
-        // TODO: Implement rotation update
-        throw new NotImplementedException();
+        Yaw = yaw;
+        Pitch = pitch;
     }
+
+    /// <summary>
+    /// Marks a chunk as loaded for this player.
+    /// </summary>
+    public void MarkChunkLoaded(int chunkX, int chunkZ)
+    {
+        LoadedChunks.Add((chunkX, chunkZ));
+    }
+
+    /// <summary>
+    /// Marks a chunk as unloaded for this player.
+    /// </summary>
+    public void MarkChunkUnloaded(int chunkX, int chunkZ)
+    {
+        LoadedChunks.Remove((chunkX, chunkZ));
+    }
+
 
     public Vector3 CalculateDropVelocity()
     {

@@ -47,8 +47,7 @@ public class World
 
     public void AddPlayer(Player player)
     {
-        // TODO: Implement player addition
-        throw new NotImplementedException();
+        _playerManager.AddPlayer(player);
     }
 
     public void RemovePlayer(Guid uuid)

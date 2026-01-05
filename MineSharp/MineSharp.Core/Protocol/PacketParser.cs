@@ -63,6 +63,14 @@ public class PacketParser
             {
                 return (packetId, ParseKeepAlive(reader));
             }
+            else if (packetId == 0x1D) // Set Player Position
+            {
+                return (packetId, ParseSetPlayerPosition(reader));
+            }
+            else if (packetId == 0x1E) // Set Player Position and Rotation
+            {
+                return (packetId, ParseSetPlayerPositionAndRotation(reader));
+            }
         }
         
         // Unknown packet
@@ -144,6 +152,38 @@ public class PacketParser
         return new KeepAlivePacket
         {
             KeepAliveId = keepAliveId
+        };
+    }
+    
+    private static SetPlayerPositionPacket ParseSetPlayerPosition(ProtocolReader reader)
+    {
+        var x = reader.ReadDouble();
+        var y = reader.ReadDouble();
+        var z = reader.ReadDouble();
+        
+        return new SetPlayerPositionPacket
+        {
+            X = x,
+            Y = y,
+            Z = z
+        };
+    }
+    
+    private static SetPlayerPositionAndRotationPacket ParseSetPlayerPositionAndRotation(ProtocolReader reader)
+    {
+        var x = reader.ReadDouble();
+        var y = reader.ReadDouble();
+        var z = reader.ReadDouble();
+        var yaw = reader.ReadFloat();
+        var pitch = reader.ReadFloat();
+        
+        return new SetPlayerPositionAndRotationPacket
+        {
+            X = x,
+            Y = y,
+            Z = z,
+            Yaw = yaw,
+            Pitch = pitch
         };
     }
 }

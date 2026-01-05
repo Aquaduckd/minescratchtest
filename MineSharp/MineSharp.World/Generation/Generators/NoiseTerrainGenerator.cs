@@ -72,7 +72,7 @@ public class NoiseTerrainGenerator : ITerrainGenerator
                     }
                     else if (y == surfaceHeight)
                     {
-                        // Surface block - determine type based on height
+                        // Surface block - determine type based on height and slope
                         int surfaceBlockId;
                         string surfaceBlockName;
                         if (surfaceHeight >= snowThreshold)
@@ -89,9 +89,25 @@ public class NoiseTerrainGenerator : ITerrainGenerator
                         }
                         else
                         {
-                            // Normal terrain - grass
-                            surfaceBlockId = GrassBlockStateId;
-                            surfaceBlockName = "minecraft:grass_block";
+                            // Normal terrain - check slope to determine grass vs dirt
+                            // Calculate slope directly from noise function to avoid chunk boundary artifacts
+                            int worldX = chunkX * 16 + x;
+                            int worldZ = chunkZ * 16 + z;
+                            double maxSlope = GetSlopeAt(worldX + 0.5, worldZ + 0.5); // Use center of block for precision
+                            
+                            const double steepSlopeThreshold = 4.0; // Height difference for steep slope
+                            if (maxSlope >= steepSlopeThreshold)
+                            {
+                                // Steep slope - dirt
+                                surfaceBlockId = DirtBlockStateId;
+                                surfaceBlockName = "minecraft:dirt";
+                            }
+                            else
+                            {
+                                // Gentle slope - grass
+                                surfaceBlockId = GrassBlockStateId;
+                                surfaceBlockName = "minecraft:grass_block";
+                            }
                         }
                         chunk.SetBlock(x, y, z, new Block(surfaceBlockId, surfaceBlockName));
                     }
@@ -211,6 +227,46 @@ public class NoiseTerrainGenerator : ITerrainGenerator
         
         // Normalize from [-1, 1] to [0, 1]
         return (noiseValue + 1.0) / 2.0;
+    }
+    
+    /// <summary>
+    /// Calculate the slope (steepness) at a world coordinate by computing the gradient of the noise function.
+    /// This avoids chunk boundary artifacts by using the continuous noise function rather than discrete block heights.
+    /// </summary>
+    /// <param name="worldX">World X coordinate (can be float for precision)</param>
+    /// <param name="worldZ">World Z coordinate (can be float for precision)</param>
+    /// <returns>Maximum slope value (height difference) in blocks</returns>
+    private double GetSlopeAt(double worldX, double worldZ)
+    {
+        // Use a small offset to calculate gradient (1 block distance)
+        const double offset = 1.0;
+        
+        // Get noise values at current position and neighbors
+        double noiseXPlus = GetNoise(worldX + offset, worldZ);
+        double noiseXMinus = GetNoise(worldX - offset, worldZ);
+        double noiseZPlus = GetNoise(worldX, worldZ + offset);
+        double noiseZMinus = GetNoise(worldX, worldZ - offset);
+        
+        // Get effective amplitude at this position (for mountain areas)
+        double mountainNoise = GetMountainNoise(worldX, worldZ);
+        int effectiveAmplitude;
+        if (mountainNoise > _mountainThreshold)
+        {
+            double mountainFactor = (mountainNoise - _mountainThreshold) / (1.0 - _mountainThreshold);
+            effectiveAmplitude = _amplitude + (int)(_mountainAmplitude * mountainFactor);
+        }
+        else
+        {
+            effectiveAmplitude = _amplitude;
+        }
+        
+        // Calculate height differences (noise difference * amplitude)
+        // Divide by 2*offset to get per-block gradient
+        double gradientX = Math.Abs((noiseXPlus - noiseXMinus) * effectiveAmplitude) / (2 * offset);
+        double gradientZ = Math.Abs((noiseZPlus - noiseZMinus) * effectiveAmplitude) / (2 * offset);
+        
+        // Maximum slope is the larger of the two gradients
+        return Math.Max(gradientX, gradientZ);
     }
     
     public GeneratorConfigSchema? GetConfigSchema()

@@ -15,6 +15,10 @@ public class LoginHandler
         Console.WriteLine($"  Username: {packet.Username}");
         Console.WriteLine($"  Player UUID: {packet.PlayerUuid}");
         
+        // Store player info in connection for later use
+        connection.PlayerUuid = packet.PlayerUuid;
+        connection.Username = packet.Username;
+        
         // Send Login Success response
         await SendLoginSuccessAsync(connection, packet.PlayerUuid, packet.Username);
         

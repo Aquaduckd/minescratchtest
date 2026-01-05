@@ -80,6 +80,14 @@ public class PacketHandler
             {
                 await _playHandler.HandleKeepAliveAsync(connection, keepAlive);
             }
+            else if (packetId == 0x1D && packet is SetPlayerPositionPacket positionPacket) // Set Player Position
+            {
+                await _playHandler.HandleSetPlayerPositionAsync(connection, positionPacket);
+            }
+            else if (packetId == 0x1E && packet is SetPlayerPositionAndRotationPacket positionRotationPacket) // Set Player Position and Rotation
+            {
+                await _playHandler.HandleSetPlayerPositionAndRotationAsync(connection, positionRotationPacket);
+            }
             else
             {
                 // TODO: Handle other PLAY state packets

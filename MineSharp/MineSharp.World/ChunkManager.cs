@@ -29,16 +29,13 @@ public class ChunkManager
     {
         var chunks = new List<(int X, int Z)>();
         
-        for (int x = -_loadingRadius; x <= _loadingRadius; x++)
+        // Minecraft renders chunks in a square region, not circular
+        // View distance 10 means 10 chunks in each direction from center = 21x21 square
+        for (int x = -_viewDistance; x <= _viewDistance; x++)
         {
-            for (int z = -_loadingRadius; z <= _loadingRadius; z++)
+            for (int z = -_viewDistance; z <= _viewDistance; z++)
             {
-                // Check if chunk is within view distance (circular)
-                double distance = Math.Sqrt(x * x + z * z);
-                if (distance <= _viewDistance)
-                {
-                    chunks.Add((centerChunkX + x, centerChunkZ + z));
-                }
+                chunks.Add((centerChunkX + x, centerChunkZ + z));
             }
         }
         

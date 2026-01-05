@@ -341,22 +341,49 @@ public class PacketBuilder
         const int numSections = 24;
         const int numLightBits = numSections + 2; // 26 bits
         
-        // Sky Light Mask: Sections from ground (y=64) upward need sky light
-        // Ground is at section 8 (y=64 to 79)
+        // Calculate min and max height from heightmap to determine which sections need sky light
+        int minHeight = heightmapEntries.Length > 0 ? heightmapEntries.Min() : 64;
+        int maxHeight = heightmapEntries.Length > 0 ? heightmapEntries.Max() : 64;
+        
+        // Determine if this is flat world (all heights are the same) or terrain
+        bool isFlatWorld = minHeight == maxHeight && minHeight == 65; // 65 = 64 + 1 (heightmap is surface + 1)
+        
+        // Sky Light Mask: Sections that need sky light
         var skyLightMaskBits = new List<bool>(numLightBits);
+        var skyLightSections = new List<int>(); // Track which sections we're sending data for
         for (int i = 0; i < numLightBits; i++)
         {
             skyLightMaskBits.Add(false);
         }
         
-        // Ground section is 8 (y=64 to 79)
-        int groundSection = 8;
-        for (int sectionIdx = groundSection; sectionIdx < numSections; sectionIdx++)
+        if (isFlatWorld)
         {
-            int bitIdx = sectionIdx + 1; // Bit 0 is for section below world
-            if (bitIdx < numLightBits)
+            // Flat world: sections from ground section (y=64) upward need sky light
+            int groundY = 64;
+            int groundSection = (groundY + 64) / 16; // Section containing ground_y
+            for (int sectionIdx = groundSection; sectionIdx < numSections; sectionIdx++)
             {
-                skyLightMaskBits[bitIdx] = true;
+                int bitIdx = sectionIdx + 1; // Bit 0 is for section below world
+                if (bitIdx < numLightBits)
+                {
+                    skyLightMaskBits[bitIdx] = true;
+                    skyLightSections.Add(sectionIdx);
+                }
+            }
+        }
+        else
+        {
+            // Terrain: sections from min height to max height (and above) need sky light
+            // Valleys (at min height) are still exposed to sky
+            int minSection = (minHeight + 64) / 16; // Section containing min height
+            for (int sectionIdx = minSection; sectionIdx < numSections; sectionIdx++)
+            {
+                int bitIdx = sectionIdx + 1; // Bit 0 is for section below world
+                if (bitIdx < numLightBits)
+                {
+                    skyLightMaskBits[bitIdx] = true;
+                    skyLightSections.Add(sectionIdx);
+                }
             }
         }
         packetWriter.WriteBitset(skyLightMaskBits);
@@ -369,13 +396,15 @@ public class PacketBuilder
         }
         packetWriter.WriteBitset(blockLightMaskBits);
         
-        // Empty Sky Light Mask: Sections below ground have no sky light
+        // Empty Sky Light Mask: Sections below minimum height have no sky light
         var emptySkyLightMaskBits = new List<bool>(numLightBits);
         for (int i = 0; i < numLightBits; i++)
         {
             emptySkyLightMaskBits.Add(false);
         }
-        for (int sectionIdx = 0; sectionIdx < groundSection; sectionIdx++)
+        
+        int minSectionForEmpty = isFlatWorld ? 8 : (minHeight + 64) / 16; // Section containing min height
+        for (int sectionIdx = 0; sectionIdx < minSectionForEmpty; sectionIdx++)
         {
             int bitIdx = sectionIdx + 1;
             if (bitIdx < numLightBits)
@@ -395,21 +424,64 @@ public class PacketBuilder
         
         // Sky Light Arrays: One array per bit set in sky light mask
         // Each array is 2048 bytes = 4096 light values (4 bits each, 0-15)
-        int skyLightArrayCount = skyLightMaskBits.Count(b => b);
-        packetWriter.WriteVarInt(skyLightArrayCount);
+        packetWriter.WriteVarInt(skyLightSections.Count);
         
-        for (int i = 0; i < skyLightArrayCount; i++)
+        foreach (int sectionIdx in skyLightSections)
         {
+            int sectionYMin = -64 + (sectionIdx * 16);
+            int sectionYMax = sectionYMin + 15;
+            
             // Generate light array (4096 values = 16x16x16 blocks)
-            // Light values: 15 = full brightness, 0 = no light
             byte[] lightArray = new byte[2048]; // 2048 bytes = 4096 nibbles
             
-            // For flat world: full sky light (15) everywhere
-            for (int j = 0; j < 2048; j++)
+            for (int y = 0; y < 16; y++)
             {
-                lightArray[j] = 0xFF; // 0xFF = two nibbles of 15 (full brightness)
+                int worldY = sectionYMin + y;
+                for (int z = 0; z < 16; z++)
+                {
+                    for (int x = 0; x < 16; x++)
+                    {
+                        // Calculate index in 4096-element array
+                        int blockIdx = y * 256 + z * 16 + x;
+                        
+                        // Calculate byte and nibble index
+                        int byteIdx = blockIdx / 2;
+                        bool isHighNibble = (blockIdx % 2) == 0;
+                        
+                        // Get height at this (x, z) position from heightmap
+                        // Heightmap is indexed as [z * 16 + x]
+                        int heightAtPos = heightmapEntries[z * 16 + x];
+                        
+                        // Determine light value based on height map
+                        // Sky light propagates downward from surface, decreasing by 1 per block
+                        int lightValue;
+                        if (worldY >= heightAtPos)
+                        {
+                            // Above or at surface: full sky light
+                            lightValue = 15;
+                        }
+                        else
+                        {
+                            // Below surface: light decreases by 1 per block downward
+                            int distanceBelow = heightAtPos - worldY;
+                            // Light level = 15 - distance, clamped to 0-15
+                            lightValue = Math.Max(0, 15 - distanceBelow);
+                        }
+                        
+                        // Pack into byte (high nibble first, then low nibble)
+                        if (isHighNibble)
+                        {
+                            lightArray[byteIdx] = (byte)((lightValue << 4) & 0xF0);
+                        }
+                        else
+                        {
+                            lightArray[byteIdx] |= (byte)(lightValue & 0x0F);
+                        }
+                    }
+                }
             }
             
+            // Write array length (2048) and data
             packetWriter.WriteVarInt(lightArray.Length);
             packetWriter.WriteBytes(lightArray);
         }
