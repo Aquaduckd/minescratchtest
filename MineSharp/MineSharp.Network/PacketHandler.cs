@@ -1,0 +1,80 @@
+using MineSharp.Core;
+using MineSharp.Core.Protocol;
+using MineSharp.Core.Protocol.PacketTypes;
+using MineSharp.Network.Handlers;
+
+namespace MineSharp.Network;
+
+/// <summary>
+/// Routes packets to appropriate handlers based on connection state.
+/// </summary>
+public class PacketHandler
+{
+    private readonly HandshakingHandler _handshakingHandler;
+    private readonly LoginHandler _loginHandler;
+    private readonly ConfigurationHandler _configurationHandler;
+    private readonly PlayHandler _playHandler;
+
+    public PacketHandler(
+        HandshakingHandler handshakingHandler,
+        LoginHandler loginHandler,
+        ConfigurationHandler configurationHandler,
+        PlayHandler playHandler)
+    {
+        _handshakingHandler = handshakingHandler;
+        _loginHandler = loginHandler;
+        _configurationHandler = configurationHandler;
+        _playHandler = playHandler;
+    }
+
+    public async Task HandlePacketAsync(ClientConnection connection, int packetId, object? packet, byte[] rawPacket)
+    {
+        var state = connection.State;
+        
+        if (state == ConnectionState.Handshaking)
+        {
+            if (packetId == 0 && packet is HandshakePacket handshake)
+            {
+                await _handshakingHandler.HandleHandshakeAsync(connection, handshake);
+            }
+        }
+        else if (state == ConnectionState.Login)
+        {
+            if (packetId == 0 && packet is LoginStartPacket loginStart)
+            {
+                await _loginHandler.HandleLoginStartAsync(connection, loginStart);
+            }
+            else if (packetId == 3) // Login Acknowledged
+            {
+                connection.SetState(ConnectionState.Configuration);
+                Console.WriteLine("  → State transition: LOGIN → CONFIGURATION");
+                
+                // Send configuration packets
+                await _configurationHandler.SendKnownPacksAsync(connection);
+                await _configurationHandler.SendAllRegistryDataAsync(connection);
+                await _configurationHandler.SendFinishConfigurationAsync(connection);
+            }
+        }
+        else if (state == ConnectionState.Configuration)
+        {
+            if (packetId == 0 && packet is ClientInformationPacket clientInfo)
+            {
+                await _configurationHandler.HandleClientInformationAsync(connection, clientInfo);
+            }
+            else if (packetId == 3) // Acknowledge Finish Configuration
+            {
+                connection.SetState(ConnectionState.Play);
+                Console.WriteLine("  → State transition: CONFIGURATION → PLAY");
+                
+                // Send initial PLAY state packets
+                await _playHandler.SendInitialPlayPacketsAsync(connection);
+            }
+        }
+        else if (state == ConnectionState.Play)
+        {
+            // TODO: Handle PLAY state packets
+            Console.WriteLine($"  → PLAY state packet (ID: 0x{packetId:X2}) - not yet implemented");
+        }
+    }
+}
+

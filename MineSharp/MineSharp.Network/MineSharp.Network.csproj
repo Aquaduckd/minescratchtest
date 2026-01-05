@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\MineSharp.Core\MineSharp.Core.csproj" />
+    <ProjectReference Include="..\MineSharp.Game\MineSharp.Game.csproj" />
+    <ProjectReference Include="..\MineSharp.Data\MineSharp.Data.csproj" />
+    <ProjectReference Include="..\MineSharp.World\MineSharp.World.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net6.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+</Project>

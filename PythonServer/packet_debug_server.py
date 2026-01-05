@@ -563,6 +563,9 @@ class World:
         # BlockManager - single source of truth for block data
         # Phase 7: Migration complete - BlockManager is now the only block storage system
         self.block_manager = BlockManager()
+        # Disable terrain generator for flat world
+        if not use_terrain_generation:
+            self.block_manager.terrain_generator = None
         self.use_terrain_generation = use_terrain_generation
         
         # Entity collision cache - store last collision check results per entity
@@ -3013,7 +3016,7 @@ def handle_client(client_socket, client_address):
                                 connection_state = ConnectionState.PLAY
                                 
                                 # Initialize world state
-                                world = World(view_distance=10, use_terrain_generation=True)                                
+                                world = World(view_distance=10, use_terrain_generation=False)                                
                                 # Start web server for visualization (if not already started)
                                 if web_server_thread is None or not web_server_thread.is_alive():
                                     web_server_thread = threading.Thread(

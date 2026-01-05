@@ -1,0 +1,58 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MineSharp.Core", "MineSharp.Core\MineSharp.Core.csproj", "{28FFA9BE-8722-400B-AB7E-E841B01B9A08}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MineSharp.Network", "MineSharp.Network\MineSharp.Network.csproj", "{9A61A852-4AE5-4856-8A63-C71BA662E11A}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MineSharp.World", "MineSharp.World\MineSharp.World.csproj", "{70FF7AE8-8C03-49FC-8579-BBDA253E10D5}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MineSharp.Game", "MineSharp.Game\MineSharp.Game.csproj", "{B7460AF7-3535-4C4A-A566-331DEB577088}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MineSharp.Data", "MineSharp.Data\MineSharp.Data.csproj", "{9490A564-8653-4140-A058-BF28455D72BF}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MineSharp.Server", "MineSharp.Server\MineSharp.Server.csproj", "{76A6B700-FF83-4F38-9282-AB4C76C2EB3A}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MineSharp.Tests", "MineSharp.Tests\MineSharp.Tests.csproj", "{4D96B400-8573-4864-9282-A230D5406261}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{28FFA9BE-8722-400B-AB7E-E841B01B9A08}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{28FFA9BE-8722-400B-AB7E-E841B01B9A08}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{28FFA9BE-8722-400B-AB7E-E841B01B9A08}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{28FFA9BE-8722-400B-AB7E-E841B01B9A08}.Release|Any CPU.Build.0 = Release|Any CPU
+		{9A61A852-4AE5-4856-8A63-C71BA662E11A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{9A61A852-4AE5-4856-8A63-C71BA662E11A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{9A61A852-4AE5-4856-8A63-C71BA662E11A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{9A61A852-4AE5-4856-8A63-C71BA662E11A}.Release|Any CPU.Build.0 = Release|Any CPU
+		{70FF7AE8-8C03-49FC-8579-BBDA253E10D5}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{70FF7AE8-8C03-49FC-8579-BBDA253E10D5}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{70FF7AE8-8C03-49FC-8579-BBDA253E10D5}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{70FF7AE8-8C03-49FC-8579-BBDA253E10D5}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B7460AF7-3535-4C4A-A566-331DEB577088}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B7460AF7-3535-4C4A-A566-331DEB577088}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B7460AF7-3535-4C4A-A566-331DEB577088}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B7460AF7-3535-4C4A-A566-331DEB577088}.Release|Any CPU.Build.0 = Release|Any CPU
+		{9490A564-8653-4140-A058-BF28455D72BF}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{9490A564-8653-4140-A058-BF28455D72BF}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{9490A564-8653-4140-A058-BF28455D72BF}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{9490A564-8653-4140-A058-BF28455D72BF}.Release|Any CPU.Build.0 = Release|Any CPU
+		{76A6B700-FF83-4F38-9282-AB4C76C2EB3A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{76A6B700-FF83-4F38-9282-AB4C76C2EB3A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{76A6B700-FF83-4F38-9282-AB4C76C2EB3A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{76A6B700-FF83-4F38-9282-AB4C76C2EB3A}.Release|Any CPU.Build.0 = Release|Any CPU
+		{4D96B400-8573-4864-9282-A230D5406261}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{4D96B400-8573-4864-9282-A230D5406261}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{4D96B400-8573-4864-9282-A230D5406261}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{4D96B400-8573-4864-9282-A230D5406261}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal
