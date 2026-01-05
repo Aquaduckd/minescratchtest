@@ -84,6 +84,7 @@ public class PlayHandler
 
     /// <summary>
     /// Sends a 3x3 grid of chunks around spawn for immediate ground rendering.
+    /// Chunks are loaded in order of distance from center (closest first).
     /// </summary>
     public async Task SendSpawnChunksAsync(ClientConnection connection, Player player)
     {
@@ -95,24 +96,36 @@ public class PlayHandler
         const int spawnChunkZ = 0;
         const int radius = 1; // 3x3 grid: -1 to +1 = 3 chunks per axis
         
-        int chunksSent = 0;
+        // Collect all chunks first
+        var chunks = new List<(int X, int Z)>();
         for (int x = -radius; x <= radius; x++)
         {
             for (int z = -radius; z <= radius; z++)
             {
-                int chunkX = spawnChunkX + x;
-                int chunkZ = spawnChunkZ + z;
-                
-                try
-                {
-                    await SendChunkDataAsync(connection, chunkX, chunkZ);
-                    player.MarkChunkLoaded(chunkX, chunkZ);
-                    chunksSent++;
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"  │  ✗ Error sending spawn chunk ({chunkX}, {chunkZ}): {ex.Message}");
-                }
+                chunks.Add((spawnChunkX + x, spawnChunkZ + z));
+            }
+        }
+        
+        // Sort by Manhattan distance from center (closest first)
+        chunks.Sort((a, b) =>
+        {
+            int distA = Math.Abs(a.X - spawnChunkX) + Math.Abs(a.Z - spawnChunkZ);
+            int distB = Math.Abs(b.X - spawnChunkX) + Math.Abs(b.Z - spawnChunkZ);
+            return distA.CompareTo(distB);
+        });
+        
+        int chunksSent = 0;
+        foreach (var (chunkX, chunkZ) in chunks)
+        {
+            try
+            {
+                await SendChunkDataAsync(connection, chunkX, chunkZ);
+                player.MarkChunkLoaded(chunkX, chunkZ);
+                chunksSent++;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"  │  ✗ Error sending spawn chunk ({chunkX}, {chunkZ}): {ex.Message}");
             }
         }
         
@@ -374,6 +387,15 @@ public class PlayHandler
         if (chunksToLoad.Count > 0)
         {
             Console.WriteLine($"  │  → Loading {chunksToLoad.Count} new chunk(s)...");
+            
+            // Sort chunks by Manhattan distance from player's chunk (closest first)
+            // This ensures chunks near the player load first for better UX
+            chunksToLoad.Sort((a, b) =>
+            {
+                int distA = Math.Abs(a.X - player.ChunkX) + Math.Abs(a.Z - player.ChunkZ);
+                int distB = Math.Abs(b.X - player.ChunkX) + Math.Abs(b.Z - player.ChunkZ);
+                return distA.CompareTo(distB);
+            });
             
             foreach (var (chunkX, chunkZ) in chunksToLoad)
             {
