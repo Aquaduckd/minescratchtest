@@ -204,8 +204,17 @@ public class PlayHandler
 
     public async Task HandleKeepAliveAsync(ClientConnection connection, KeepAlivePacket packet)
     {
-        // TODO: Implement keep alive handling
-        throw new NotImplementedException();
+        // Verify the keep alive ID matches what we sent
+        if (connection.LastKeepAliveId.HasValue && connection.LastKeepAliveId.Value == packet.KeepAliveId)
+        {
+            Console.WriteLine($"  │  ✓ Keep Alive response received (ID: {packet.KeepAliveId})");
+            // Client is still connected and responding
+        }
+        else
+        {
+            Console.WriteLine($"  │  ⚠ Keep Alive response ID mismatch: expected {connection.LastKeepAliveId}, got {packet.KeepAliveId}");
+            // This could indicate a timing issue or client problem, but we'll continue
+        }
     }
 
     public async Task HandlePlayerActionAsync(ClientConnection connection, PlayerActionPacket packet)
@@ -228,8 +237,18 @@ public class PlayHandler
 
     public async Task SendKeepAliveAsync(ClientConnection connection, long keepAliveId)
     {
-        // TODO: Implement keep alive sending
-        throw new NotImplementedException();
+        Console.WriteLine($"  │  → Sending Keep Alive (ID: {keepAliveId})...");
+        try
+        {
+            var keepAlivePacket = PacketBuilder.BuildKeepAlivePacket(keepAliveId);
+            await connection.SendPacketAsync(keepAlivePacket);
+            Console.WriteLine($"  │  ✓ Keep Alive sent ({keepAlivePacket.Length} bytes)");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"  │  ✗ Error sending Keep Alive: {ex.Message}");
+            throw;
+        }
     }
 }
 

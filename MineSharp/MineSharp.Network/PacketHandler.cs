@@ -68,12 +68,23 @@ public class PacketHandler
                 
                 // Send initial PLAY state packets
                 await _playHandler.SendInitialPlayPacketsAsync(connection);
+                
+                // Start keep alive thread (send every 10 seconds)
+                connection.StartKeepAlive(_playHandler, intervalSeconds: 10);
+                Console.WriteLine("  │  ✓ Keep Alive thread started (interval: 10s)");
             }
         }
         else if (state == ConnectionState.Play)
         {
-            // TODO: Handle PLAY state packets
-            Console.WriteLine($"  → PLAY state packet (ID: 0x{packetId:X2}) - not yet implemented");
+            if (packetId == 0x1B && packet is KeepAlivePacket keepAlive) // Serverbound Keep Alive
+            {
+                await _playHandler.HandleKeepAliveAsync(connection, keepAlive);
+            }
+            else
+            {
+                // TODO: Handle other PLAY state packets
+                Console.WriteLine($"  → PLAY state packet (ID: 0x{packetId:X2}) - not yet implemented");
+            }
         }
     }
 }

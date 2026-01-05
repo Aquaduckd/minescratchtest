@@ -1,6 +1,7 @@
 using MineSharp.Core;
 using MineSharp.Core.Protocol;
 using MineSharp.Game;
+using MineSharp.Network.Handlers;
 using System.Net.Sockets;
 using System.Collections.Generic;
 using System.Linq;
@@ -21,6 +22,9 @@ public class ClientConnection
     private Player? _player;
     private readonly List<byte> _receiveBuffer = new();
     private readonly PacketHandler _packetHandler;
+    private long? _lastKeepAliveId;
+    private CancellationTokenSource? _keepAliveCancellationTokenSource;
+    private Task? _keepAliveTask;
 
     public ConnectionState State
     {
@@ -33,6 +37,12 @@ public class ClientConnection
     {
         get => _player;
         set => _player = value;
+    }
+    
+    public long? LastKeepAliveId
+    {
+        get => _lastKeepAliveId;
+        set => _lastKeepAliveId = value;
     }
 
     public ClientConnection(TcpClient client, PacketHandler packetHandler)
@@ -164,10 +174,70 @@ public class ClientConnection
         _state = newState;
     }
 
+    public void StartKeepAlive(PlayHandler playHandler, int intervalSeconds = 10)
+    {
+        // Stop any existing keep alive task
+        StopKeepAlive();
+        
+        // Create new cancellation token for keep alive
+        _keepAliveCancellationTokenSource = new CancellationTokenSource();
+        
+        // Start keep alive task
+        _keepAliveTask = Task.Run(async () =>
+        {
+            try
+            {
+                while (!_keepAliveCancellationTokenSource.Token.IsCancellationRequested)
+                {
+                    // Generate keep alive ID (timestamp in milliseconds)
+                    var keepAliveId = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                    _lastKeepAliveId = keepAliveId;
+                    
+                    // Send keep alive packet
+                    await playHandler.SendKeepAliveAsync(this, keepAliveId);
+                    
+                    // Wait for interval (or cancellation)
+                    await Task.Delay(TimeSpan.FromSeconds(intervalSeconds), _keepAliveCancellationTokenSource.Token);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // Expected when cancellation is requested
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"  │  ✗ Keep Alive thread error: {ex.Message}");
+            }
+        });
+    }
+
+    public void StopKeepAlive()
+    {
+        try
+        {
+            _keepAliveCancellationTokenSource?.Cancel();
+            if (_keepAliveTask != null)
+            {
+                _keepAliveTask.Wait(TimeSpan.FromSeconds(1)); // Wait up to 1 second for task to complete
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error stopping keep alive: {ex.Message}");
+        }
+        finally
+        {
+            _keepAliveCancellationTokenSource?.Dispose();
+            _keepAliveCancellationTokenSource = null;
+            _keepAliveTask = null;
+        }
+    }
+
     public void Disconnect()
     {
         try
         {
+            StopKeepAlive();
             _cancellationTokenSource.Cancel();
             _stream?.Close();
             _client?.Close();

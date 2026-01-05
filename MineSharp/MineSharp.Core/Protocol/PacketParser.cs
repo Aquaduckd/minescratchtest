@@ -59,7 +59,10 @@ public class PacketParser
         }
         else if (state == ConnectionState.Play)
         {
-            // TODO: Implement PLAY state packet parsing
+            if (packetId == 0x1B) // Serverbound Keep Alive
+            {
+                return (packetId, ParseKeepAlive(reader));
+            }
         }
         
         // Unknown packet
@@ -132,6 +135,16 @@ public class PacketParser
         }
         
         return packs;
+    }
+    
+    private static KeepAlivePacket ParseKeepAlive(ProtocolReader reader)
+    {
+        var keepAliveId = reader.ReadLong();
+        
+        return new KeepAlivePacket
+        {
+            KeepAliveId = keepAliveId
+        };
     }
 }
 

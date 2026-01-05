@@ -542,10 +542,22 @@ public class PacketBuilder
         return finalWriter.ToArray();
     }
 
-    public byte[] BuildKeepAlivePacket(long keepAliveId)
+    public static byte[] BuildKeepAlivePacket(long keepAliveId)
     {
-        // TODO: Implement keep alive packet building
-        throw new NotImplementedException();
+        // Build packet data (without length prefix)
+        var packetWriter = new ProtocolWriter();
+        packetWriter.WriteVarInt(0x2B); // Keep Alive packet ID (clientbound)
+        
+        // Keep Alive ID (Long)
+        packetWriter.WriteLong(keepAliveId);
+        
+        // Build final packet with length prefix
+        var packetData = packetWriter.ToArray();
+        var finalWriter = new ProtocolWriter();
+        finalWriter.WriteVarInt(packetData.Length);
+        finalWriter.WriteBytes(packetData);
+        
+        return finalWriter.ToArray();
     }
 }
 
