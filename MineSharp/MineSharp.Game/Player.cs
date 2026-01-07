@@ -9,28 +9,37 @@ namespace MineSharp.Game;
 public class Player
 {
     public Guid Uuid { get; }
+    public int EntityId { get; }
     public Vector3 Position { get; private set; }
     public int ChunkX { get; private set; }
     public int ChunkZ { get; private set; }
     public float Yaw { get; private set; }
     public float Pitch { get; private set; }
+    public float HeadYaw { get; private set; }
     public int ViewDistance { get; }
     public Inventory Inventory { get; }
     public HashSet<(int X, int Z)> LoadedChunks { get; }
     private readonly HashSet<(int X, int Z)> _chunksLoadingInProgress = new HashSet<(int X, int Z)>();
     private readonly object _chunkLock = new object();
 
-    public Player(Guid uuid, int viewDistance = 10)
+    // Entity visibility tracking
+    public HashSet<int> VisibleEntityIds { get; }
+    private readonly object _entityVisibilityLock = new object();
+
+    public Player(Guid uuid, int entityId, int viewDistance = 10)
     {
         Uuid = uuid;
+        EntityId = entityId;
         ViewDistance = viewDistance;
         Position = new Vector3(0, 64, 0);
         ChunkX = 0;
         ChunkZ = 0;
         Yaw = 0;
         Pitch = 0;
+        HeadYaw = 0;
         Inventory = new Inventory();
         LoadedChunks = new HashSet<(int, int)>();
+        VisibleEntityIds = new HashSet<int>();
     }
 
     public (int oldChunkX, int oldChunkZ, int newChunkX, int newChunkZ)? UpdatePosition(Vector3 newPosition)
@@ -63,6 +72,15 @@ public class Player
     {
         Yaw = yaw;
         Pitch = pitch;
+        // Head yaw typically follows body yaw, but can be different when looking around
+        // For now, we'll update head yaw to match body yaw
+        // In the future, we can add separate head yaw updates from client
+        HeadYaw = yaw;
+    }
+    
+    public void UpdateHeadYaw(float headYaw)
+    {
+        HeadYaw = headYaw;
     }
 
     /// <summary>
@@ -146,6 +164,63 @@ public class Player
     {
         // TODO: Implement drop velocity calculation
         throw new NotImplementedException();
+    }
+
+    /// <summary>
+    /// Adds an entity to the visible entities set (thread-safe).
+    /// Returns true if the entity was added (wasn't already visible).
+    /// </summary>
+    public bool AddVisibleEntity(int entityId)
+    {
+        lock (_entityVisibilityLock)
+        {
+            return VisibleEntityIds.Add(entityId);
+        }
+    }
+
+    /// <summary>
+    /// Removes an entity from the visible entities set (thread-safe).
+    /// Returns true if the entity was removed (was visible).
+    /// </summary>
+    public bool RemoveVisibleEntity(int entityId)
+    {
+        lock (_entityVisibilityLock)
+        {
+            return VisibleEntityIds.Remove(entityId);
+        }
+    }
+
+    /// <summary>
+    /// Checks if an entity is currently visible (thread-safe).
+    /// </summary>
+    public bool IsEntityVisible(int entityId)
+    {
+        lock (_entityVisibilityLock)
+        {
+            return VisibleEntityIds.Contains(entityId);
+        }
+    }
+
+    /// <summary>
+    /// Gets a copy of all visible entity IDs (thread-safe).
+    /// </summary>
+    public HashSet<int> GetVisibleEntities()
+    {
+        lock (_entityVisibilityLock)
+        {
+            return new HashSet<int>(VisibleEntityIds);
+        }
+    }
+
+    /// <summary>
+    /// Clears all visible entities (thread-safe).
+    /// </summary>
+    public void ClearVisibleEntities()
+    {
+        lock (_entityVisibilityLock)
+        {
+            VisibleEntityIds.Clear();
+        }
     }
 }
 

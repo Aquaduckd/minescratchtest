@@ -71,6 +71,10 @@ public class PacketParser
             {
                 return (packetId, ParseSetPlayerPositionAndRotation(reader));
             }
+            else if (packetId == 0x1F) // Set Player Rotation
+            {
+                return (packetId, ParseSetPlayerRotation(reader));
+            }
         }
         
         // Unknown packet
@@ -182,6 +186,18 @@ public class PacketParser
             X = x,
             Y = y,
             Z = z,
+            Yaw = yaw,
+            Pitch = pitch
+        };
+    }
+    
+    private static SetPlayerRotationPacket ParseSetPlayerRotation(ProtocolReader reader)
+    {
+        var yaw = reader.ReadFloat();
+        var pitch = reader.ReadFloat();
+        
+        return new SetPlayerRotationPacket
+        {
             Yaw = yaw,
             Pitch = pitch
         };

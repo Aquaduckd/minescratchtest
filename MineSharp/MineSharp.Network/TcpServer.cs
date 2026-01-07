@@ -53,6 +53,17 @@ public class TcpServer
         Console.WriteLine("Server stopped");
     }
 
+    /// <summary>
+    /// Gets all active client connections (thread-safe).
+    /// </summary>
+    public List<ClientConnection> GetAllConnections()
+    {
+        lock (_connections)
+        {
+            return new List<ClientConnection>(_connections);
+        }
+    }
+
     private async Task AcceptConnectionsAsync(CancellationToken cancellationToken)
     {
         while (!cancellationToken.IsCancellationRequested)
@@ -78,6 +89,19 @@ public class TcpServer
                     }
                     finally
                     {
+                        // Notify PlayHandler of disconnection if player exists
+                        if (connection.Player != null)
+                        {
+                            try
+                            {
+                                await _packetHandler.PlayHandler.OnPlayerDisconnectedAsync(connection.Player);
+                            }
+                            catch (Exception ex)
+                            {
+                                Console.WriteLine($"Error notifying player disconnection: {ex.Message}");
+                            }
+                        }
+                        
                         lock (_connections)
                         {
                             _connections.Remove(connection);

@@ -631,5 +631,343 @@ public class PacketBuilder
         
         return finalWriter.ToArray();
     }
+
+    /// <summary>
+    /// Builds a Spawn Entity packet (0x01).
+    /// Used to spawn entities including players.
+    /// </summary>
+    public static byte[] BuildSpawnEntityPacket(
+        int entityId,
+        Guid entityUuid,
+        int entityType,
+        double x,
+        double y,
+        double z,
+        double velocityX = 0.0,
+        double velocityY = 0.0,
+        double velocityZ = 0.0,
+        float pitch = 0.0f,
+        float yaw = 0.0f,
+        float headYaw = 0.0f,
+        int data = 0)
+    {
+        var packetWriter = new ProtocolWriter();
+        packetWriter.WriteVarInt(0x01); // Spawn Entity packet ID
+        
+        // Entity ID
+        packetWriter.WriteVarInt(entityId);
+        
+        // Entity UUID
+        packetWriter.WriteUuid(entityUuid);
+        
+        // Entity Type (VarInt)
+        packetWriter.WriteVarInt(entityType);
+        
+        // Position (Double)
+        packetWriter.WriteDouble(x);
+        packetWriter.WriteDouble(y);
+        packetWriter.WriteDouble(z);
+        
+        // Velocity (LpVec3)
+        packetWriter.WriteLpVec3(velocityX, velocityY, velocityZ);
+        
+        // Pitch (Angle)
+        packetWriter.WriteAngle(pitch);
+        
+        // Yaw (Angle)
+        packetWriter.WriteAngle(yaw);
+        
+        // Head Yaw (Angle)
+        packetWriter.WriteAngle(headYaw);
+        
+        // Data (VarInt)
+        packetWriter.WriteVarInt(data);
+        
+        // Build final packet with length prefix
+        var packetData = packetWriter.ToArray();
+        var finalWriter = new ProtocolWriter();
+        finalWriter.WriteVarInt(packetData.Length);
+        finalWriter.WriteBytes(packetData);
+        
+        return finalWriter.ToArray();
+    }
+
+    /// <summary>
+    /// Builds a Player Info Update packet (0x44).
+    /// Used to add or update players on the client's player list.
+    /// </summary>
+    /// <param name="players">List of players to add/update, each with UUID and name</param>
+    public static byte[] BuildPlayerInfoUpdatePacket(List<(Guid Uuid, string Name)> players)
+    {
+        if (players == null)
+        {
+            throw new ArgumentNullException(nameof(players), "Players list cannot be null");
+        }
+        if (players.Count == 0)
+        {
+            throw new ArgumentException("Players list cannot be empty", nameof(players));
+        }
+
+        var packetWriter = new ProtocolWriter();
+        packetWriter.WriteVarInt(0x44); // Player Info Update packet ID
+
+        // Actions: EnumSet - encoded as Fixed BitSet
+        // Player Info Update has 6 actions:
+        // 0x01 = Add Player (bit 0)
+        // 0x02 = Initialize Chat (bit 1)
+        // 0x04 = Update Game Mode (bit 2)
+        // 0x08 = Update Listed (bit 3)
+        // 0x10 = Update Latency (bit 4)
+        // 0x20 = Update Display Name (bit 5)
+        // Fixed BitSet size = ceil(6/8) = 1 byte
+        const int NUM_PLAYER_INFO_ACTIONS = 6;
+        const int ADD_PLAYER_ACTION_BIT = 0x01; // Bit 0
+        packetWriter.WriteFixedBitSet(ADD_PLAYER_ACTION_BIT, NUM_PLAYER_INFO_ACTIONS);
+
+        // Players: Prefixed Array
+        packetWriter.WriteVarInt(players.Count);
+        
+        foreach (var (uuid, name) in players)
+        {
+            // UUID
+            packetWriter.WriteUuid(uuid);
+            
+            // Player Actions array - length determined by which actions are set
+            // For Add Player action, we need to write:
+            // - Name (String, 16 chars max)
+            // - Properties (Prefixed Array, can be empty)
+            
+            // Name
+            if (string.IsNullOrEmpty(name))
+            {
+                throw new ArgumentException("Player name cannot be null or empty", nameof(players));
+            }
+            // Truncate to 16 characters if needed (protocol limit)
+            string playerName = name.Length > 16 ? name.Substring(0, 16) : name;
+            packetWriter.WriteString(playerName);
+            
+            // Properties: Prefixed Array (can be empty for offline mode)
+            // Empty array means client will use default skin based on UUID
+            packetWriter.WriteVarInt(0); // Empty properties array
+        }
+
+        // Build final packet with length prefix
+        var packetData = packetWriter.ToArray();
+        var finalWriter = new ProtocolWriter();
+        finalWriter.WriteVarInt(packetData.Length);
+        finalWriter.WriteBytes(packetData);
+        
+        return finalWriter.ToArray();
+    }
+
+    /// <summary>
+    /// Builds a Remove Entities packet (0x4B).
+    /// Removes entities from the client.
+    /// </summary>
+    public static byte[] BuildRemoveEntitiesPacket(int[] entityIds)
+    {
+        if (entityIds == null || entityIds.Length == 0)
+        {
+            throw new ArgumentException("Entity IDs array cannot be null or empty", nameof(entityIds));
+        }
+        
+        var packetWriter = new ProtocolWriter();
+        packetWriter.WriteVarInt(0x4B); // Remove Entities packet ID
+        
+        // Entity IDs (Prefixed Array of VarInt)
+        packetWriter.WriteVarInt(entityIds.Length);
+        foreach (int entityId in entityIds)
+        {
+            packetWriter.WriteVarInt(entityId);
+        }
+        
+        // Build final packet with length prefix
+        var packetData = packetWriter.ToArray();
+        var finalWriter = new ProtocolWriter();
+        finalWriter.WriteVarInt(packetData.Length);
+        finalWriter.WriteBytes(packetData);
+        
+        return finalWriter.ToArray();
+    }
+
+    /// <summary>
+    /// Builds an Update Entity Position packet (0x33).
+    /// Used for small position changes (delta < 8 blocks).
+    /// Position delta is encoded as fixed-point: (currentX * 4096 - prevX * 4096) as Short.
+    /// </summary>
+    public static byte[] BuildUpdateEntityPositionPacket(
+        int entityId,
+        short deltaX,
+        short deltaY,
+        short deltaZ,
+        bool onGround)
+    {
+        var packetWriter = new ProtocolWriter();
+        packetWriter.WriteVarInt(0x33); // Update Entity Position packet ID
+        
+        // Entity ID
+        packetWriter.WriteVarInt(entityId);
+        
+        // Delta X, Y, Z (Short)
+        packetWriter.WriteShort(deltaX);
+        packetWriter.WriteShort(deltaY);
+        packetWriter.WriteShort(deltaZ);
+        
+        // On Ground (Boolean)
+        packetWriter.WriteBool(onGround);
+        
+        // Build final packet with length prefix
+        var packetData = packetWriter.ToArray();
+        var finalWriter = new ProtocolWriter();
+        finalWriter.WriteVarInt(packetData.Length);
+        finalWriter.WriteBytes(packetData);
+        
+        return finalWriter.ToArray();
+    }
+
+    /// <summary>
+    /// Builds an Update Entity Position and Rotation packet (0x34).
+    /// Used for position and rotation updates together.
+    /// Position delta is encoded as fixed-point: (currentX * 4096 - prevX * 4096) as Short.
+    /// </summary>
+    public static byte[] BuildUpdateEntityPositionAndRotationPacket(
+        int entityId,
+        short deltaX,
+        short deltaY,
+        short deltaZ,
+        float yaw,
+        float pitch,
+        bool onGround)
+    {
+        var packetWriter = new ProtocolWriter();
+        packetWriter.WriteVarInt(0x34); // Update Entity Position and Rotation packet ID
+        
+        // Entity ID
+        packetWriter.WriteVarInt(entityId);
+        
+        // Delta X, Y, Z (Short)
+        packetWriter.WriteShort(deltaX);
+        packetWriter.WriteShort(deltaY);
+        packetWriter.WriteShort(deltaZ);
+        
+        // Yaw (Angle)
+        packetWriter.WriteAngle(yaw);
+        
+        // Pitch (Angle)
+        packetWriter.WriteAngle(pitch);
+        
+        // On Ground (Boolean)
+        packetWriter.WriteBool(onGround);
+        
+        // Build final packet with length prefix
+        var packetData = packetWriter.ToArray();
+        var finalWriter = new ProtocolWriter();
+        finalWriter.WriteVarInt(packetData.Length);
+        finalWriter.WriteBytes(packetData);
+        
+        return finalWriter.ToArray();
+    }
+
+    /// <summary>
+    /// Builds an Update Entity Rotation packet (0x36).
+    /// Used for rotation-only updates.
+    /// </summary>
+    public static byte[] BuildUpdateEntityRotationPacket(
+        int entityId,
+        float yaw,
+        float pitch,
+        bool onGround)
+    {
+        var packetWriter = new ProtocolWriter();
+        packetWriter.WriteVarInt(0x36); // Update Entity Rotation packet ID
+        
+        // Entity ID
+        packetWriter.WriteVarInt(entityId);
+        
+        // Yaw (Angle)
+        packetWriter.WriteAngle(yaw);
+        
+        // Pitch (Angle)
+        packetWriter.WriteAngle(pitch);
+        
+        // On Ground (Boolean)
+        packetWriter.WriteBool(onGround);
+        
+        // Build final packet with length prefix
+        var packetData = packetWriter.ToArray();
+        var finalWriter = new ProtocolWriter();
+        finalWriter.WriteVarInt(packetData.Length);
+        finalWriter.WriteBytes(packetData);
+        
+        return finalWriter.ToArray();
+    }
+
+    /// <summary>
+    /// Builds a Teleport Entity packet (0x7B).
+    /// Used for large position changes (>= 8 blocks) or absolute position updates.
+    /// </summary>
+    public static byte[] BuildTeleportEntityPacket(
+        int entityId,
+        double x,
+        double y,
+        double z,
+        float yaw,
+        float pitch,
+        bool onGround)
+    {
+        var packetWriter = new ProtocolWriter();
+        packetWriter.WriteVarInt(0x7B); // Teleport Entity packet ID
+        
+        // Entity ID
+        packetWriter.WriteVarInt(entityId);
+        
+        // Position (Double)
+        packetWriter.WriteDouble(x);
+        packetWriter.WriteDouble(y);
+        packetWriter.WriteDouble(z);
+        
+        // Yaw (Angle)
+        packetWriter.WriteAngle(yaw);
+        
+        // Pitch (Angle)
+        packetWriter.WriteAngle(pitch);
+        
+        // On Ground (Boolean)
+        packetWriter.WriteBool(onGround);
+        
+        // Build final packet with length prefix
+        var packetData = packetWriter.ToArray();
+        var finalWriter = new ProtocolWriter();
+        finalWriter.WriteVarInt(packetData.Length);
+        finalWriter.WriteBytes(packetData);
+        
+        return finalWriter.ToArray();
+    }
+
+    /// <summary>
+    /// Builds a Rotate Head packet (0x51).
+    /// Used for head rotation-only updates (head yaw).
+    /// </summary>
+    public static byte[] BuildRotateHeadPacket(
+        int entityId,
+        float headYaw)
+    {
+        var packetWriter = new ProtocolWriter();
+        packetWriter.WriteVarInt(0x51); // Rotate Head packet ID
+
+        // Entity ID
+        packetWriter.WriteVarInt(entityId);
+
+        // Head Yaw (Angle)
+        packetWriter.WriteAngle(headYaw);
+
+        // Build final packet with length prefix
+        var packetData = packetWriter.ToArray();
+        var finalWriter = new ProtocolWriter();
+        finalWriter.WriteVarInt(packetData.Length);
+        finalWriter.WriteBytes(packetData);
+
+        return finalWriter.ToArray();
+    }
 }
 

@@ -67,7 +67,11 @@ public class Server
         var handshakingHandler = new Network.Handlers.HandshakingHandler();
         var loginHandler = new Network.Handlers.LoginHandler();
         var configurationHandler = new Network.Handlers.ConfigurationHandler(_registryManager);
-        var playHandler = new Network.Handlers.PlayHandler(_world);
+        
+        // Create function to get all connections from TcpServer
+        // Note: This creates a closure that captures _tcpServer, which will be set before StartAsync
+        Func<System.Collections.Generic.IEnumerable<Network.ClientConnection>> getAllConnections = () => _tcpServer.GetAllConnections();
+        var playHandler = new Network.Handlers.PlayHandler(_world, getAllConnections, _registryManager);
         
         return new Network.PacketHandler(handshakingHandler, loginHandler, configurationHandler, playHandler);
     }

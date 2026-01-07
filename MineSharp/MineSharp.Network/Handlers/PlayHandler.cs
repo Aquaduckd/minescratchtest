@@ -1,9 +1,12 @@
 using MineSharp.Core;
 using MineSharp.Core.Protocol;
 using MineSharp.Core.Protocol.PacketTypes;
+using MineSharp.Data;
 using MineSharp.Game;
+using MineSharp.Network;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace MineSharp.Network.Handlers;
 
@@ -13,10 +16,33 @@ namespace MineSharp.Network.Handlers;
 public class PlayHandler
 {
     private readonly MineSharp.World.World? _world;
+    private readonly PlayerVisibilityManager? _visibilityManager;
 
-    public PlayHandler(MineSharp.World.World? world = null)
+    public PlayHandler(MineSharp.World.World? world = null, Func<IEnumerable<ClientConnection>>? getAllConnections = null, RegistryManager? registryManager = null)
     {
         _world = world;
+        
+        // Create PlayerVisibilityManager if world and connection getter are available
+        if (_world != null && getAllConnections != null)
+        {
+            // Look up player entity type ID from registry
+            int playerEntityTypeId = 151; // Default fallback (protocol_id for minecraft:player in entity_type registry)
+            if (registryManager != null)
+            {
+                var protocolId = registryManager.GetRegistryEntryProtocolId("minecraft:entity_type", "minecraft:player");
+                if (protocolId.HasValue)
+                {
+                    playerEntityTypeId = protocolId.Value;
+                }
+            }
+            
+            _visibilityManager = new PlayerVisibilityManager(
+                world: _world,
+                playHandler: this,
+                getAllConnections: getAllConnections,
+                viewDistanceBlocks: 48.0, // 48 blocks = 3 chunks (default Minecraft view distance for entities)
+                playerEntityTypeId: playerEntityTypeId);
+        }
     }
     public async Task SendInitialPlayPacketsAsync(ClientConnection connection)
     {
@@ -25,18 +51,27 @@ public class PlayHandler
         // Create player if not already created
         if (connection.Player == null && connection.PlayerUuid.HasValue)
         {
-            var player = new MineSharp.Game.Player(connection.PlayerUuid.Value, viewDistance: 10);
+            // Get entity ID from world's entity manager
+            int entityId = 1; // Default fallback
+            if (_world != null)
+            {
+                entityId = _world.EntityManager.GetNextPlayerEntityId();
+            }
+            
+            var player = new MineSharp.Game.Player(connection.PlayerUuid.Value, entityId, viewDistance: 10);
             connection.Player = player;
             
             // Add player to world if available
             if (_world != null)
             {
                 _world.AddPlayer(player);
-                Console.WriteLine($"  │  ✓ Player created and added to world (UUID: {connection.PlayerUuid})");
+                // Note: Players are tracked in PlayerManager, not EntityManager
+                // EntityManager is for non-player entities
+                Console.WriteLine($"  │  ✓ Player created and added to world (UUID: {connection.PlayerUuid}, EntityId: {entityId})");
             }
             else
             {
-                Console.WriteLine($"  │  ✓ Player created (UUID: {connection.PlayerUuid})");
+                Console.WriteLine($"  │  ✓ Player created (UUID: {connection.PlayerUuid}, EntityId: {entityId})");
             }
         }
         
@@ -80,6 +115,20 @@ public class PlayHandler
         // Send Synchronize Player Position (spawn at 0, 65, 0) AFTER spawn chunks are loaded
         // This ensures the player spawns on solid ground without waiting for all chunks
         await SendSynchronizePlayerPositionAsync(connection, 0.0, 65.0, 0.0, 0.0f, 0.0f, 0, 0);
+        
+        // Send Player Info Update packets (steps 33/34 in FAQ)
+        // Step 33: All existing players to new player
+        // Step 34: New player to all existing players
+        if (_visibilityManager != null && connection.Player != null)
+        {
+            await _visibilityManager.SendPlayerInfoUpdatesAsync(connection, connection.Player);
+        }
+        
+        // Notify visibility manager of new player (for entity spawning based on view distance)
+        if (_visibilityManager != null && connection.Player != null)
+        {
+            await _visibilityManager.OnPlayerJoinedAsync(connection, connection.Player);
+        }
         
         // Now load the rest of the chunks in the view distance using ChunkLoader
         if (connection.ChunkLoader != null && connection.Player != null && _world != null)
@@ -204,14 +253,21 @@ public class PlayHandler
         
         try
         {
+            // Get the player's actual entity ID
+            int entityId = 1; // Default fallback
+            if (connection.Player != null)
+            {
+                entityId = connection.Player.EntityId;
+            }
+            
             var loginPlay = PacketBuilder.BuildLoginPlayPacket(
-                entityId: 1,
+                entityId: entityId,
                 dimensionNames: new List<string> { "minecraft:overworld" },
                 gameMode: 1, // Creative (0=Survival, 1=Creative, 2=Adventure, 3=Spectator)
                 dimensionName: "minecraft:overworld"
             );
             await connection.SendPacketAsync(loginPlay);
-            Console.WriteLine($"  │  ✓ Login (play) sent ({loginPlay.Length} bytes)");
+            Console.WriteLine($"  │  ✓ Login (play) sent (EntityId: {entityId}, {loginPlay.Length} bytes)");
         }
         catch (Exception ex)
         {
@@ -321,6 +377,12 @@ public class PlayHandler
             }
         }
         
+        // Notify visibility manager of player movement
+        if (_visibilityManager != null && player != null)
+        {
+            await _visibilityManager.OnPlayerMovedAsync(player);
+        }
+        
         await Task.CompletedTask;
     }
 
@@ -360,13 +422,49 @@ public class PlayHandler
             }
         }
         
+        // Notify visibility manager of player movement
+        if (_visibilityManager != null && player != null)
+        {
+            await _visibilityManager.OnPlayerMovedAsync(player);
+        }
+        
         await Task.CompletedTask;
     }
 
     public async Task HandleSetPlayerRotationAsync(ClientConnection connection, SetPlayerRotationPacket packet)
     {
-        // TODO: Implement set player rotation handling
-        throw new NotImplementedException();
+        Console.WriteLine($"  │  ← Received Set Player Rotation: Yaw: {packet.Yaw:F2}, Pitch: {packet.Pitch:F2}");
+        
+        var player = connection.Player;
+        if (player == null)
+        {
+            Console.WriteLine($"  │  ⚠ Warning: Received rotation update but player is not set");
+            return;
+        }
+        
+        // Update player rotation
+        player.UpdateRotation(packet.Yaw, packet.Pitch);
+        
+        // Notify visibility manager of rotation change (rotation-only update)
+        // This will also check and broadcast head yaw updates
+        if (_visibilityManager != null && player != null)
+        {
+            await _visibilityManager.BroadcastRotationUpdateAsync(player);
+        }
+        
+        await Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Called when a player disconnects.
+    /// Notifies the visibility manager to despawn the player for all other players.
+    /// </summary>
+    public async Task OnPlayerDisconnectedAsync(Player disconnectedPlayer)
+    {
+        if (_visibilityManager != null && disconnectedPlayer != null)
+        {
+            await _visibilityManager.OnPlayerDisconnectedAsync(disconnectedPlayer);
+        }
     }
 
     public async Task HandleKeepAliveAsync(ClientConnection connection, KeepAlivePacket packet)

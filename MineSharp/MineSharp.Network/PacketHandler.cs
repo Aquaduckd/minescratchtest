@@ -15,6 +15,8 @@ public class PacketHandler
     private readonly ConfigurationHandler _configurationHandler;
     private readonly PlayHandler _playHandler;
 
+    public PlayHandler PlayHandler => _playHandler;
+
     public PacketHandler(
         HandshakingHandler handshakingHandler,
         LoginHandler loginHandler,
@@ -87,6 +89,10 @@ public class PacketHandler
             else if (packetId == 0x1E && packet is SetPlayerPositionAndRotationPacket positionRotationPacket) // Set Player Position and Rotation
             {
                 await _playHandler.HandleSetPlayerPositionAndRotationAsync(connection, positionRotationPacket);
+            }
+            else if (packetId == 0x1F && packet is SetPlayerRotationPacket rotationPacket) // Set Player Rotation
+            {
+                await _playHandler.HandleSetPlayerRotationAsync(connection, rotationPacket);
             }
             else
             {

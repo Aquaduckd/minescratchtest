@@ -19,7 +19,7 @@ public class ChunkLoadWorkerPoolTests
         // Arrange
         var requestManager = new ChunkLoadRequestManager(debounceMs: 0);
         var world = new MineSharp.World.World(viewDistance: 10);
-        var player = new Player(Guid.NewGuid(), viewDistance: 10);
+        var player = new Player(Guid.NewGuid(), entityId: 1, viewDistance: 10);
         var playHandler = new PlayHandler(world);
         // Note: ClientConnection requires TcpClient, so we'll skip full integration test for now
         // This test verifies the structure compiles
@@ -35,7 +35,7 @@ public class ChunkLoadWorkerPoolTests
         // Arrange
         var requestManager = new ChunkLoadRequestManager(debounceMs: 0);
         var world = new MineSharp.World.World(viewDistance: 10);
-        var player = new Player(Guid.NewGuid(), viewDistance: 10);
+        var player = new Player(Guid.NewGuid(), entityId: 1, viewDistance: 10);
         var playHandler = new PlayHandler(world);
         
         // We can't fully test without ClientConnection, but we can test the structure

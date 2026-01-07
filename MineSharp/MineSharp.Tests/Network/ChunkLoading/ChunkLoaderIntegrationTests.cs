@@ -18,7 +18,7 @@ public class ChunkLoaderIntegrationTests
     {
         // Arrange
         var world = new MineSharp.World.World(viewDistance: 10);
-        var player = new Player(Guid.NewGuid(), viewDistance: 10);
+        var player = new Player(Guid.NewGuid(), entityId: 1, viewDistance: 10);
         var playHandler = new PlayHandler(world);
         
         // Note: We can't fully test without ClientConnection (requires TcpClient)
@@ -34,7 +34,7 @@ public class ChunkLoaderIntegrationTests
     {
         // Arrange
         var world = new MineSharp.World.World(viewDistance: 10);
-        var player = new Player(Guid.NewGuid(), viewDistance: 10);
+        var player = new Player(Guid.NewGuid(), entityId: 1, viewDistance: 10);
         var playHandler = new PlayHandler(world);
         
         // We can't create ChunkLoader without ClientConnection, but we can test the player
@@ -46,7 +46,7 @@ public class ChunkLoaderIntegrationTests
     {
         // Arrange
         var world = new MineSharp.World.World(viewDistance: 10);
-        var player = new Player(Guid.NewGuid(), viewDistance: 10);
+        var player = new Player(Guid.NewGuid(), entityId: 1, viewDistance: 10);
         
         // Act
         var loadedChunks = player.LoadedChunks;

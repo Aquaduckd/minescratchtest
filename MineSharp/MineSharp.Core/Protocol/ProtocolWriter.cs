@@ -265,5 +265,132 @@ public class ProtocolWriter
         
         return this;
     }
+
+    /// <summary>
+    /// Writes an Angle (1 byte).
+    /// Angle is encoded as steps of 1/256 of a full turn.
+    /// Formula: byteValue = (angleInDegrees * 256 / 360) mod 256
+    /// </summary>
+    public ProtocolWriter WriteAngle(float angleInDegrees)
+    {
+        // Convert degrees to byte: (angle * 256 / 360) mod 256
+        // Normalize angle to 0-360 range first
+        float normalizedAngle = angleInDegrees % 360f;
+        if (normalizedAngle < 0)
+        {
+            normalizedAngle += 360f;
+        }
+        
+        byte angleByte = (byte)Math.Round(normalizedAngle * 256f / 360f);
+        _buffer.Add(angleByte);
+        return this;
+    }
+
+    /// <summary>
+    /// Writes an LpVec3 (Low Precision Vec3).
+    /// Encodes 3 doubles in a compact format (usually 6 bytes).
+    /// Used for velocity in Spawn Entity and Set Entity Velocity packets.
+    /// 
+    /// Implementation based on protocol spec pseudocode.
+    /// </summary>
+    public ProtocolWriter WriteLpVec3(double x, double y, double z)
+    {
+        // Clamp values to valid range
+        const double MAX_VALUE = 1.7179869183e10;
+        x = Math.Max(-MAX_VALUE, Math.Min(MAX_VALUE, x));
+        y = Math.Max(-MAX_VALUE, Math.Min(MAX_VALUE, y));
+        z = Math.Max(-MAX_VALUE, Math.Min(MAX_VALUE, z));
+        
+        // Check for NaN
+        if (double.IsNaN(x) || double.IsNaN(y) || double.IsNaN(z))
+        {
+            x = y = z = 0.0;
+        }
+        
+        // Find the absolute maximum of all three values
+        double maxCoordinate = Math.Max(Math.Max(Math.Abs(x), Math.Abs(y)), Math.Abs(z));
+        
+        // If all values are very small (< 3.051944088384301e-5), encode as single byte 0x00
+        if (maxCoordinate < 3.051944088384301e-5)
+        {
+            _buffer.Add(0x00);
+            return this;
+        }
+        
+        // Calculate scale factor (rounded up)
+        long maxCoordinateI = (long)maxCoordinate;
+        long scaleFactor = maxCoordinate > (double)maxCoordinateI ? maxCoordinateI + 1L : maxCoordinateI;
+        
+        // Check if continuation is needed (if scaleFactor >= 3)
+        bool needContinuation = (scaleFactor & 3L) != scaleFactor;
+        
+        // Pack function: (value * 0.5 + 0.5) * 32766
+        const double MAX_QUANTIZED_VALUE = 32766.0;
+        long pack(double value)
+        {
+            double normalized = (value / (double)scaleFactor) * 0.5 + 0.5; // Scale to 0-1
+            return (long)Math.Round(normalized * MAX_QUANTIZED_VALUE);
+        }
+        
+        long packedX = pack(x) << 3;
+        long packedY = pack(y) << 18;
+        long packedZ = pack(z) << 33;
+        
+        // Pack scale factor (2 bits) with continuation flag if needed
+        long packedScale = needContinuation ? (scaleFactor & 3L) | 4L : scaleFactor;
+        
+        // Combine all packed values
+        long packed = packedZ | packedY | packedX | packedScale;
+        
+        // Write first 2 bytes (little-endian)
+        _buffer.Add((byte)(packed & 0xFF));
+        _buffer.Add((byte)((packed >> 8) & 0xFF));
+        
+        // Write next 4 bytes as int (big-endian)
+        int upperBits = (int)(packed >> 16);
+        _buffer.Add((byte)((upperBits >> 24) & 0xFF));
+        _buffer.Add((byte)((upperBits >> 16) & 0xFF));
+        _buffer.Add((byte)((upperBits >> 8) & 0xFF));
+        _buffer.Add((byte)(upperBits & 0xFF));
+        
+        // If continuation needed, write remaining scale factor as VarInt
+        if (needContinuation)
+        {
+            WriteVarInt((int)(scaleFactor >> 2));
+        }
+        
+        return this;
+    }
+
+    /// <summary>
+    /// Writes a Fixed BitSet (n bits).
+    /// A bitset where each bit corresponds to an enum variant.
+    /// Size is ceil(n / 8) bytes.
+    /// </summary>
+    /// <param name="bits">The bits to set (bit 0 = first enum, bit 1 = second enum, etc.)</param>
+    /// <param name="numBits">The number of bits in the bitset (number of enum variants)</param>
+    public ProtocolWriter WriteFixedBitSet(int bits, int numBits)
+    {
+        int numBytes = (int)Math.Ceiling(numBits / 8.0);
+        
+        for (int i = 0; i < numBytes; i++)
+        {
+            byte b = 0;
+            for (int bitIndex = 0; bitIndex < 8; bitIndex++)
+            {
+                int globalBitIndex = i * 8 + bitIndex;
+                if (globalBitIndex < numBits)
+                {
+                    if ((bits & (1 << globalBitIndex)) != 0)
+                    {
+                        b |= (byte)(1 << bitIndex);
+                    }
+                }
+            }
+            _buffer.Add(b);
+        }
+        
+        return this;
+    }
 }
 

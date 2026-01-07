@@ -152,6 +152,27 @@ public class RegistryManager
         return fallbacks.GetValueOrDefault(registryId, new List<(string, byte[]?)>());
     }
 
+    /// <summary>
+    /// Gets the protocol ID for a specific entry in a registry.
+    /// </summary>
+    /// <param name="registryId">The registry ID (e.g., "minecraft:entity_type")</param>
+    /// <param name="entryId">The entry ID (e.g., "minecraft:player")</param>
+    /// <returns>The protocol ID if found, null otherwise</returns>
+    public int? GetRegistryEntryProtocolId(string registryId, string entryId)
+    {
+        if (_registries != null && _registries.TryGetValue(registryId, out var entries))
+        {
+            if (entries.TryGetValue(entryId, out var entry))
+            {
+                if (entry.TryGetProperty("protocol_id", out var protocolIdElement))
+                {
+                    return protocolIdElement.GetInt32();
+                }
+            }
+        }
+        return null;
+    }
+
     public List<string> GetRequiredRegistryIds()
     {
         return new List<string>
