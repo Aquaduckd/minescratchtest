@@ -4,43 +4,54 @@ namespace MineSharp.World.Generation.Utilities;
 
 /// <summary>
 /// Simple Perlin noise implementation for terrain generation.
-/// Based on classic Perlin noise algorithm.
+/// Uses hash-based permutation to support infinite terrain without repetition.
+/// Based on classic Perlin noise algorithm with hash-based gradients.
 /// </summary>
 public static class PerlinNoise
 {
-    private static readonly int[] Permutation = {
-        151, 160, 137, 91, 90, 15, 131, 13, 201, 95, 96, 53, 194, 233, 7, 225,
-        140, 36, 103, 30, 69, 142, 8, 99, 37, 240, 21, 10, 23, 190, 6, 148,
-        247, 120, 234, 75, 0, 26, 197, 62, 94, 252, 219, 203, 117, 35, 11, 32,
-        57, 177, 33, 88, 237, 149, 56, 87, 174, 20, 125, 136, 171, 168, 68, 175,
-        74, 165, 71, 134, 139, 48, 27, 166, 77, 146, 158, 231, 83, 111, 229, 122,
-        60, 211, 133, 230, 220, 105, 92, 41, 55, 46, 245, 40, 244, 102, 143, 54,
-        65, 25, 63, 161, 1, 216, 80, 73, 209, 76, 132, 187, 208, 89, 18, 169,
-        200, 196, 135, 130, 116, 188, 159, 86, 164, 100, 109, 198, 173, 186, 3, 64,
-        52, 217, 226, 250, 124, 123, 5, 202, 38, 147, 118, 126, 255, 82, 85, 212,
-        207, 206, 59, 227, 47, 16, 58, 17, 182, 189, 28, 42, 223, 183, 170, 213,
-        119, 248, 152, 2, 44, 154, 163, 70, 221, 153, 101, 155, 167, 43, 172, 9,
-        129, 22, 39, 253, 19, 98, 108, 110, 79, 113, 224, 232, 178, 185, 112, 104,
-        218, 246, 97, 228, 251, 34, 242, 193, 238, 210, 144, 12, 191, 179, 162, 241,
-        81, 51, 145, 235, 249, 14, 239, 107, 49, 192, 214, 31, 181, 199, 106, 157,
-        184, 84, 204, 176, 115, 121, 50, 45, 127, 4, 150, 254, 138, 236, 205, 93,
-        222, 114, 67, 29, 24, 72, 243, 141, 128, 195, 78, 66, 215, 61, 156, 180
+    // Gradient vectors for 2D noise (12 directions)
+    // Each pair represents (gx, gz) for a gradient direction
+    private static readonly double[] Gradients2D = {
+        1.0, 1.0,   // Diagonal
+        -1.0, 1.0,  // Diagonal
+        1.0, -1.0,  // Diagonal
+        -1.0, -1.0, // Diagonal
+        1.0, 0.0,   // Horizontal
+        -1.0, 0.0,  // Horizontal
+        0.0, 1.0,   // Vertical
+        0.0, -1.0,  // Vertical
+        1.0, 1.0,   // Diagonal (duplicate for variety)
+        0.0, -1.0,  // Vertical (duplicate)
+        -1.0, 1.0,  // Diagonal (duplicate)
+        0.0, 1.0    // Vertical (duplicate)
     };
+    
+    private const int GradientCount = 12; // Number of gradient directions
 
-    private static readonly int[] P;
-
-    static PerlinNoise()
+    /// <summary>
+    /// Hash function for generating pseudo-random values from coordinates.
+    /// Uses a simple but effective hash that works well for noise generation.
+    /// </summary>
+    private static int Hash(int x, int z, int seed)
     {
-        // Double the permutation array for wrapping
-        P = new int[512];
-        for (int i = 0; i < 256; i++)
-        {
-            P[256 + i] = P[i] = Permutation[i];
-        }
+        // Combine coordinates with seed using prime multipliers
+        // This creates a good distribution without repetition
+        // Note: XOR has lower precedence than multiplication, so we need parentheses
+        uint hash = ((uint)x * 73856093u) ^ ((uint)z * 19349663u) ^ ((uint)seed * 83492791u);
+        
+        // Mix bits for better distribution
+        hash ^= hash >> 16;
+        hash *= 0x85ebca6b;
+        hash ^= hash >> 13;
+        hash *= 0xc2b2ae35;
+        hash ^= hash >> 16;
+        
+        return (int)hash;
     }
 
     /// <summary>
     /// Generate 2D Perlin noise value at given coordinates.
+    /// Uses hash-based permutation to support infinite terrain without repetition.
     /// </summary>
     /// <param name="x">X coordinate</param>
     /// <param name="z">Z coordinate</param>
@@ -48,35 +59,50 @@ public static class PerlinNoise
     /// <returns>Noise value in range [-1, 1]</returns>
     public static double Noise2D(double x, double z, int seed = 0)
     {
-        // Apply seed offset
-        x += seed * 100.0;
-        z += seed * 200.0;
-
         // Get integer and fractional parts
-        int X = (int)Math.Floor(x) & 255;
-        int Z = (int)Math.Floor(z) & 255;
+        int X = (int)Math.Floor(x);
+        int Z = (int)Math.Floor(z);
 
-        x -= Math.Floor(x);
-        z -= Math.Floor(z);
+        x -= X;
+        z -= Z;
 
         // Fade curves
         double u = Fade(x);
         double v = Fade(z);
 
-        // Hash coordinates of the 4 square corners
-        int A = P[X] + Z;
-        int AA = P[A];
-        int AB = P[A + 1];
-        int B = P[X + 1] + Z;
-        int BA = P[B];
-        int BB = P[B + 1];
+        // Hash the 4 square corners to get gradient indices
+        int hash00 = Hash(X, Z, seed);
+        int hash10 = Hash(X + 1, Z, seed);
+        int hash01 = Hash(X, Z + 1, seed);
+        int hash11 = Hash(X + 1, Z + 1, seed);
 
-        // Blend the 4 corner values
+        // Get gradient indices (modulo gradient count)
+        int grad00 = Math.Abs(hash00) % GradientCount;
+        int grad10 = Math.Abs(hash10) % GradientCount;
+        int grad01 = Math.Abs(hash01) % GradientCount;
+        int grad11 = Math.Abs(hash11) % GradientCount;
+
+        // Calculate dot products with gradient vectors
+        double dot00 = DotGradient2D(grad00, x, z);
+        double dot10 = DotGradient2D(grad10, x - 1, z);
+        double dot01 = DotGradient2D(grad01, x, z - 1);
+        double dot11 = DotGradient2D(grad11, x - 1, z - 1);
+
+        // Blend the 4 corner values using bilinear interpolation
         return Lerp(v,
-            Lerp(u, Grad(P[AA], x, z, 0),
-                    Grad(P[BA], x - 1, z, 0)),
-            Lerp(u, Grad(P[AB], x, z - 1, 0),
-                    Grad(P[BB], x - 1, z - 1, 0)));
+            Lerp(u, dot00, dot10),
+            Lerp(u, dot01, dot11));
+    }
+
+    /// <summary>
+    /// Calculate dot product with a 2D gradient vector.
+    /// </summary>
+    private static double DotGradient2D(int gradIndex, double x, double z)
+    {
+        int index = (Math.Abs(gradIndex) % GradientCount) * 2;
+        double gx = Gradients2D[index];
+        double gz = Gradients2D[index + 1];
+        return gx * x + gz * z;
     }
 
     /// <summary>
@@ -126,12 +152,5 @@ public static class PerlinNoise
         return a + t * (b - a);
     }
 
-    private static double Grad(int hash, double x, double z, double y)
-    {
-        int h = hash & 15;
-        double u = h < 8 ? x : z;
-        double v = h < 4 ? z : (h == 12 || h == 14 ? x : y);
-        return ((h & 1) == 0 ? u : -u) + ((h & 2) == 0 ? v : -v);
-    }
 }
 
