@@ -27,6 +27,7 @@ public class ClientConnection
     private string? _username;
     private CancellationTokenSource? _keepAliveCancellationTokenSource;
     private Task? _keepAliveTask;
+    private ChunkLoader? _chunkLoader;
 
     public ConnectionState State
     {
@@ -57,6 +58,12 @@ public class ClientConnection
     {
         get => _username;
         set => _username = value;
+    }
+    
+    public ChunkLoader? ChunkLoader
+    {
+        get => _chunkLoader;
+        set => _chunkLoader = value;
     }
 
     public ClientConnection(TcpClient client, PacketHandler packetHandler)
@@ -252,6 +259,7 @@ public class ClientConnection
         try
         {
             StopKeepAlive();
+            _chunkLoader?.Shutdown();
             _cancellationTokenSource.Cancel();
             _stream?.Close();
             _client?.Close();

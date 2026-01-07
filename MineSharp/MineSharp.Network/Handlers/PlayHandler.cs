@@ -51,6 +51,15 @@ public class PlayHandler
             connection.Player.UpdatePosition(spawnPosition);
         }
         
+        // Create and initialize ChunkLoader
+        if (_world != null && connection.Player != null)
+        {
+            var chunkLoader = new ChunkLoader(connection, _world, connection.Player, this);
+            connection.ChunkLoader = chunkLoader;
+            chunkLoader.StartLoading();
+            Console.WriteLine("  │  ✓ ChunkLoader created and started");
+        }
+        
         // Send Update Time
         await SendUpdateTimeAsync(connection, 0, 6000, true);
         
@@ -63,7 +72,7 @@ public class PlayHandler
         
         // Send a 3x3 grid of chunks around spawn FIRST (9 chunks total)
         // This ensures immediate ground exists when player spawns
-        if (_world != null && connection.Player != null)
+        if (connection.ChunkLoader != null && connection.Player != null)
         {
             await SendSpawnChunksAsync(connection, connection.Player);
         }
@@ -72,11 +81,16 @@ public class PlayHandler
         // This ensures the player spawns on solid ground without waiting for all chunks
         await SendSynchronizePlayerPositionAsync(connection, 0.0, 65.0, 0.0, 0.0f, 0.0f, 0, 0);
         
-        // Now load the rest of the chunks in the view distance (async, doesn't block)
-        if (_world != null && connection.Player != null)
+        // Now load the rest of the chunks in the view distance using ChunkLoader
+        if (connection.ChunkLoader != null && connection.Player != null && _world != null)
         {
-            // Continue loading remaining chunks
-            await SendInitialChunksAsync(connection);
+            // Calculate desired chunks for full view distance
+            var chunkManager = _world.ChunkManager;
+            var desiredChunks = new HashSet<(int X, int Z)>(chunkManager.GetChunksInRange(connection.Player.ChunkX, connection.Player.ChunkZ));
+            
+            // Update ChunkLoader with desired chunks (will load remaining chunks in background)
+            connection.ChunkLoader.UpdateDesiredChunks(desiredChunks);
+            Console.WriteLine($"  │  → ChunkLoader updated with {desiredChunks.Count} desired chunks");
         }
         
         Console.WriteLine("  └─");
@@ -84,11 +98,11 @@ public class PlayHandler
 
     /// <summary>
     /// Sends a 3x3 grid of chunks around spawn for immediate ground rendering.
-    /// Chunks are loaded in order of distance from center (closest first).
+    /// Uses ChunkLoader to load chunks synchronously for immediate spawn.
     /// </summary>
     public async Task SendSpawnChunksAsync(ClientConnection connection, Player player)
     {
-        if (_world == null) return;
+        if (connection.ChunkLoader == null || _world == null) return;
         
         Console.WriteLine("  │  → Sending spawn chunks (3x3 grid)...");
         
@@ -96,55 +110,65 @@ public class PlayHandler
         const int spawnChunkZ = 0;
         const int radius = 1; // 3x3 grid: -1 to +1 = 3 chunks per axis
         
-        // Collect all chunks first
-        var chunks = new List<(int X, int Z)>();
+        // Collect all chunks for 3x3 grid
+        var spawnChunks = new HashSet<(int X, int Z)>();
         for (int x = -radius; x <= radius; x++)
         {
             for (int z = -radius; z <= radius; z++)
             {
-                chunks.Add((spawnChunkX + x, spawnChunkZ + z));
+                spawnChunks.Add((spawnChunkX + x, spawnChunkZ + z));
             }
         }
         
-        // Sort by Manhattan distance from center (closest first)
-        chunks.Sort((a, b) =>
-        {
-            int distA = Math.Abs(a.X - spawnChunkX) + Math.Abs(a.Z - spawnChunkZ);
-            int distB = Math.Abs(b.X - spawnChunkX) + Math.Abs(b.Z - spawnChunkZ);
-            return distA.CompareTo(distB);
-        });
+        // Update ChunkLoader with spawn chunks (will start loading them)
+        connection.ChunkLoader.UpdateDesiredChunks(spawnChunks);
         
-        int chunksSent = 0;
-        foreach (var (chunkX, chunkZ) in chunks)
+        // Wait for all spawn chunks to be loaded (synchronous wait for immediate spawn)
+        int maxWaitTime = 5000; // 5 seconds max wait
+        int waitInterval = 50; // Check every 50ms
+        int waited = 0;
+        
+        while (waited < maxWaitTime)
         {
-            try
+            bool allLoaded = true;
+            foreach (var chunk in spawnChunks)
             {
-                await SendChunkDataAsync(connection, chunkX, chunkZ);
-                player.MarkChunkLoaded(chunkX, chunkZ);
-                chunksSent++;
+                if (!connection.ChunkLoader.IsChunkLoaded(chunk.X, chunk.Z))
+                {
+                    allLoaded = false;
+                    break;
+                }
             }
-            catch (Exception ex)
+            
+            if (allLoaded)
             {
-                Console.WriteLine($"  │  ✗ Error sending spawn chunk ({chunkX}, {chunkZ}): {ex.Message}");
+                break;
+            }
+            
+            await Task.Delay(waitInterval);
+            waited += waitInterval;
+        }
+        
+        int loadedCount = 0;
+        foreach (var chunk in spawnChunks)
+        {
+            if (connection.ChunkLoader.IsChunkLoaded(chunk.X, chunk.Z))
+            {
+                loadedCount++;
             }
         }
         
-        Console.WriteLine($"  │  ✓ Spawn chunks sent ({chunksSent} chunks)");
+        Console.WriteLine($"  │  ✓ Spawn chunks loaded ({loadedCount}/{spawnChunks.Count} chunks)");
     }
 
     public async Task SendInitialChunksAsync(ClientConnection connection)
     {
-        if (_world == null || connection.Player == null) return;
+        // This method is now handled by ChunkLoader.UpdateDesiredChunks()
+        // Kept for backward compatibility but no longer needed
+        if (connection.ChunkLoader == null || connection.Player == null || _world == null) return;
         
-        var player = connection.Player;
-        
-        Console.WriteLine("  │  → Sending remaining chunks around spawn...");
-        
-        // Use the new UpdatePlayerChunksAsync method to load remaining chunks
-        // This will handle loading chunks that aren't already loaded, marking as loaded, and updating center chunk
-        await UpdatePlayerChunksAsync(connection, player);
-        
-        Console.WriteLine($"  │  ✓ All chunks loaded ({player.LoadedChunks.Count} total)");
+        Console.WriteLine("  │  → ChunkLoader is handling remaining chunks in background...");
+        // ChunkLoader is already running and will load chunks as needed
     }
 
     public async Task SendChunkDataAsync(ClientConnection connection, int chunkX, int chunkZ)
@@ -161,6 +185,14 @@ public class PlayHandler
             Console.WriteLine($"  │  ✗ Error building/sending chunk ({chunkX}, {chunkZ}): {ex.Message}");
             throw;
         }
+    }
+
+    /// <summary>
+    /// Sends chunk data. Can be called by ChunkLoader.
+    /// </summary>
+    public async Task SendChunkDataForLoaderAsync(ClientConnection connection, int chunkX, int chunkZ)
+    {
+        await SendChunkDataAsync(connection, chunkX, chunkZ);
     }
 
     public async Task SendLoginPlayPacketAsync(ClientConnection connection)
@@ -274,8 +306,16 @@ public class PlayHandler
             var (oldChunkX, oldChunkZ, newChunkX, newChunkZ) = chunkChange.Value;
             Console.WriteLine($"  │  → Chunk boundary crossed: ({oldChunkX}, {oldChunkZ}) → ({newChunkX}, {newChunkZ})");
             
-            // Trigger chunk loading/unloading
-            await UpdatePlayerChunksAsync(connection, player);
+            // Update ChunkLoader with new desired chunks (non-blocking)
+            if (connection.ChunkLoader != null && _world != null)
+            {
+                var chunkManager = _world.ChunkManager;
+                var desiredChunks = new HashSet<(int X, int Z)>(chunkManager.GetChunksInRange(newChunkX, newChunkZ));
+                connection.ChunkLoader.UpdateDesiredChunks(desiredChunks);
+                
+                // Update center chunk
+                await SendSetCenterChunkAsync(connection, newChunkX, newChunkZ);
+            }
         }
         
         await Task.CompletedTask;
@@ -305,8 +345,16 @@ public class PlayHandler
             var (oldChunkX, oldChunkZ, newChunkX, newChunkZ) = chunkChange.Value;
             Console.WriteLine($"  │  → Chunk boundary crossed: ({oldChunkX}, {oldChunkZ}) → ({newChunkX}, {newChunkZ})");
             
-            // Trigger chunk loading/unloading
-            await UpdatePlayerChunksAsync(connection, player);
+            // Update ChunkLoader with new desired chunks (non-blocking)
+            if (connection.ChunkLoader != null && _world != null)
+            {
+                var chunkManager = _world.ChunkManager;
+                var desiredChunks = new HashSet<(int X, int Z)>(chunkManager.GetChunksInRange(newChunkX, newChunkZ));
+                connection.ChunkLoader.UpdateDesiredChunks(desiredChunks);
+                
+                // Update center chunk
+                await SendSetCenterChunkAsync(connection, newChunkX, newChunkZ);
+            }
         }
         
         await Task.CompletedTask;
@@ -370,48 +418,116 @@ public class PlayHandler
     /// <summary>
     /// Updates player's loaded chunks by loading new chunks and unloading distant ones.
     /// Maintains a square region of chunks around the player based on view distance.
+    /// 
+    /// DEPRECATED: This method is replaced by ChunkLoader. Use ChunkLoader.UpdateDesiredChunks() instead.
     /// </summary>
+    [Obsolete("Use ChunkLoader.UpdateDesiredChunks() instead")]
     public async Task UpdatePlayerChunksAsync(ClientConnection connection, Player player)
     {
         if (_world == null) return;
         
         var chunkManager = _world.ChunkManager;
         
-        // Get chunks that need to be loaded
-        var chunksToLoad = chunkManager.GetChunksToLoad(player.LoadedChunks, player.ChunkX, player.ChunkZ);
+        // Capture player's chunk position at the start to ensure consistency
+        // This prevents issues where the player moves during chunk loading
+        int targetChunkX = player.ChunkX;
+        int targetChunkZ = player.ChunkZ;
         
-        // Get chunks that should be unloaded
-        var chunksToUnload = chunkManager.GetChunksToUnload(player.LoadedChunks, player.ChunkX, player.ChunkZ);
+        // Get chunks that need to be loaded based on captured position
+        // We'll re-check loaded chunks dynamically during the loop to avoid stale data
+        var chunksToLoad = chunkManager.GetChunksToLoad(player.LoadedChunks, targetChunkX, targetChunkZ);
+        
+        // Get chunks that should be unloaded based on captured position
+        var chunksToUnload = chunkManager.GetChunksToUnload(player.LoadedChunks, targetChunkX, targetChunkZ);
         
         // Load new chunks
         if (chunksToLoad.Count > 0)
         {
             Console.WriteLine($"  │  → Loading {chunksToLoad.Count} new chunk(s)...");
             
-            // Sort chunks by Manhattan distance from player's chunk (closest first)
-            // This ensures chunks near the player load first for better UX
+            // Sort chunks by Manhattan distance from target chunk (closest first)
+            // This ensures chunks near the target position load first for better UX
             chunksToLoad.Sort((a, b) =>
             {
-                int distA = Math.Abs(a.X - player.ChunkX) + Math.Abs(a.Z - player.ChunkZ);
-                int distB = Math.Abs(b.X - player.ChunkX) + Math.Abs(b.Z - player.ChunkZ);
+                int distA = Math.Abs(a.X - targetChunkX) + Math.Abs(a.Z - targetChunkZ);
+                int distB = Math.Abs(b.X - targetChunkX) + Math.Abs(b.Z - targetChunkZ);
                 return distA.CompareTo(distB);
             });
             
             foreach (var (chunkX, chunkZ) in chunksToLoad)
             {
+                // Re-check loaded chunks dynamically (another task might have loaded this)
+                // This prevents race conditions when multiple chunk loading tasks run simultaneously
+                if (player.IsChunkLoaded(chunkX, chunkZ))
+                {
+                    continue; // Already loaded by another task, skip
+                }
+                
+                // Check if another task is already loading this chunk
+                if (player.IsChunkLoading(chunkX, chunkZ))
+                {
+                    continue; // Another task is loading it, skip
+                }
+                
+                // Mark as loading BEFORE sending (prevents duplicate sends)
+                if (!player.MarkChunkLoading(chunkX, chunkZ))
+                {
+                    continue; // Another task started loading it, skip
+                }
+                
+                // Verify chunk is still needed (player might have moved)
+                // Only load chunks that are still in range of the target position
+                var chunksInRange = chunkManager.GetChunksInRange(targetChunkX, targetChunkZ);
+                if (!chunksInRange.Contains((chunkX, chunkZ)))
+                {
+                    // Player moved, this chunk is no longer needed
+                    player.MarkChunkLoadingFailed(chunkX, chunkZ);
+                    continue;
+                }
+                
                 try
                 {
+                    // Send chunk data - this will throw if connection is broken or send fails
                     await SendChunkDataAsync(connection, chunkX, chunkZ);
-                    player.MarkChunkLoaded(chunkX, chunkZ);
+                    
+                    // CRITICAL: Before marking as loaded, verify chunk is still needed for player's CURRENT position
+                    // Player might have moved during the send, making this chunk no longer relevant
+                    int currentChunkX = player.ChunkX;
+                    int currentChunkZ = player.ChunkZ;
+                    var currentChunksInRange = chunkManager.GetChunksInRange(currentChunkX, currentChunkZ);
+                    
+                    if (!currentChunksInRange.Contains((chunkX, chunkZ)))
+                    {
+                        // Player moved - this chunk is no longer in range of current position
+                        // Don't mark as loaded, let it be retried for the new position
+                        player.MarkChunkLoadingFailed(chunkX, chunkZ);
+                        Console.WriteLine($"  │  → Chunk ({chunkX}, {chunkZ}) sent but player moved from ({targetChunkX}, {targetChunkZ}) to ({currentChunkX}, {currentChunkZ}) - not marking as loaded");
+                        continue;
+                    }
+                    
+                    // Only mark as loaded AFTER successful send AND verification it's still needed
+                    // MarkChunkLoaded will remove it from loading set and add to loaded set
+                    if (player.MarkChunkLoaded(chunkX, chunkZ))
+                    {
+                        // Successfully marked as loaded
+                    }
+                    else
+                    {
+                        // Another task loaded it between our check and mark - that's fine
+                        Console.WriteLine($"  │  → Chunk ({chunkX}, {chunkZ}) was loaded by another task during send");
+                    }
                 }
                 catch (Exception ex)
                 {
                     Console.WriteLine($"  │  ✗ Error loading chunk ({chunkX}, {chunkZ}): {ex.Message}");
+                    // Mark loading as failed so it can be retried
+                    player.MarkChunkLoadingFailed(chunkX, chunkZ);
+                    // Don't mark as loaded if send failed - will retry on next update
                 }
             }
             
-            // Update center chunk to player's current chunk
-            await SendSetCenterChunkAsync(connection, player.ChunkX, player.ChunkZ);
+            // Update center chunk to target chunk (the position we were loading for)
+            await SendSetCenterChunkAsync(connection, targetChunkX, targetChunkZ);
         }
         
         // Unload distant chunks

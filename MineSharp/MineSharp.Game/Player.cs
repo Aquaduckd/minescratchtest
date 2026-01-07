@@ -17,6 +17,8 @@ public class Player
     public int ViewDistance { get; }
     public Inventory Inventory { get; }
     public HashSet<(int X, int Z)> LoadedChunks { get; }
+    private readonly HashSet<(int X, int Z)> _chunksLoadingInProgress = new HashSet<(int X, int Z)>();
+    private readonly object _chunkLock = new object();
 
     public Player(Guid uuid, int viewDistance = 10)
     {
@@ -64,19 +66,79 @@ public class Player
     }
 
     /// <summary>
-    /// Marks a chunk as loaded for this player.
+    /// Marks a chunk as being loaded (thread-safe).
+    /// Returns true if the chunk can be loaded (not already loaded or loading).
     /// </summary>
-    public void MarkChunkLoaded(int chunkX, int chunkZ)
+    public bool MarkChunkLoading(int chunkX, int chunkZ)
     {
-        LoadedChunks.Add((chunkX, chunkZ));
+        lock (_chunkLock)
+        {
+            if (LoadedChunks.Contains((chunkX, chunkZ)) || _chunksLoadingInProgress.Contains((chunkX, chunkZ)))
+            {
+                return false; // Already loaded or loading
+            }
+            _chunksLoadingInProgress.Add((chunkX, chunkZ));
+            return true;
+        }
     }
 
     /// <summary>
-    /// Marks a chunk as unloaded for this player.
+    /// Marks a chunk as loaded for this player (thread-safe).
+    /// Should only be called after successfully sending the chunk.
+    /// Returns true if the chunk was actually added (wasn't already loaded).
+    /// </summary>
+    public bool MarkChunkLoaded(int chunkX, int chunkZ)
+    {
+        lock (_chunkLock)
+        {
+            _chunksLoadingInProgress.Remove((chunkX, chunkZ)); // Remove from loading set
+            return LoadedChunks.Add((chunkX, chunkZ));
+        }
+    }
+
+    /// <summary>
+    /// Marks a chunk loading as failed (thread-safe).
+    /// Removes it from the loading set so it can be retried.
+    /// </summary>
+    public void MarkChunkLoadingFailed(int chunkX, int chunkZ)
+    {
+        lock (_chunkLock)
+        {
+            _chunksLoadingInProgress.Remove((chunkX, chunkZ));
+        }
+    }
+
+    /// <summary>
+    /// Checks if a chunk is loaded (thread-safe).
+    /// </summary>
+    public bool IsChunkLoaded(int chunkX, int chunkZ)
+    {
+        lock (_chunkLock)
+        {
+            return LoadedChunks.Contains((chunkX, chunkZ));
+        }
+    }
+
+    /// <summary>
+    /// Checks if a chunk is currently being loaded (thread-safe).
+    /// </summary>
+    public bool IsChunkLoading(int chunkX, int chunkZ)
+    {
+        lock (_chunkLock)
+        {
+            return _chunksLoadingInProgress.Contains((chunkX, chunkZ));
+        }
+    }
+
+    /// <summary>
+    /// Marks a chunk as unloaded for this player (thread-safe).
     /// </summary>
     public void MarkChunkUnloaded(int chunkX, int chunkZ)
     {
-        LoadedChunks.Remove((chunkX, chunkZ));
+        lock (_chunkLock)
+        {
+            LoadedChunks.Remove((chunkX, chunkZ));
+        }
     }
 
 
