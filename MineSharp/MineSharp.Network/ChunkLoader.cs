@@ -1,29 +1,27 @@
 using MineSharp.Game;
+using MineSharp.Network.ChunkLoading;
 using MineSharp.Network.Handlers;
 using MineSharp.World;
+using System;
+using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace MineSharp.Network;
 
 /// <summary>
 /// Manages chunk loading for a single player connection.
-/// Maintains a desired chunks set and uses cancellation tokens to handle concurrent loading.
+/// Uses the robust chunk loading system with request management, worker pool, and health monitoring.
 /// </summary>
 public class ChunkLoader
 {
-    // Desired state: chunks that SHOULD be loaded
-    private readonly HashSet<(int X, int Z)> _desiredChunks = new();
-    private readonly object _desiredChunksLock = new();
+    // New robust system components
+    private readonly ChunkLoadRequestManager _requestManager;
+    private readonly ChunkLoadWorkerPool _workerPool;
+    private readonly ChunkLoadHealthMonitor _healthMonitor;
     
-    // Active loads: chunks currently being loaded with their cancellation tokens
-    private readonly Dictionary<(int X, int Z), CancellationTokenSource> _activeLoads = new();
-    private readonly object _activeLoadsLock = new();
-    
-    // Already loaded chunks (for reference)
-    private readonly HashSet<(int X, int Z)> _loadedChunks = new();
-    private readonly object _loadedChunksLock = new();
-    
-    // Background task that processes the loading queue
-    private Task? _loadingTask;
+    // Background task that processes pending updates and refreshes queue
+    private Task? _updateProcessorTask;
     private readonly CancellationTokenSource _shutdownToken = new();
     
     // Dependencies
@@ -40,220 +38,107 @@ public class ChunkLoader
         _player = player;
         _chunkManager = world.ChunkManager;
         _playHandler = playHandler;
+        
+        // Initialize robust system components
+        _requestManager = new ChunkLoadRequestManager(debounceMs: 150);
+        _workerPool = new ChunkLoadWorkerPool(
+            workerCount: 6,
+            requestManager: _requestManager,
+            connection: _connection,
+            playHandler: _playHandler,
+            player: _player);
+        _healthMonitor = new ChunkLoadHealthMonitor(
+            requestManager: _requestManager,
+            checkInterval: TimeSpan.FromSeconds(2),
+            stuckLoadTimeout: TimeSpan.FromSeconds(10));
     }
 
     /// <summary>
-    /// Updates the desired chunks set.
+    /// Updates the desired chunks set (debounced).
     /// Adds new chunks to load and cancels loads for chunks that are no longer desired.
     /// </summary>
     public void UpdateDesiredChunks(HashSet<(int X, int Z)> newDesiredChunks)
     {
-        lock (_desiredChunksLock)
+        // Update request manager (debounced)
+        _requestManager.UpdateDesiredChunks(newDesiredChunks);
+        
+        // Unload chunks that are no longer desired
+        var currentDesired = _requestManager.GetDesiredChunks();
+        var loadedChunks = GetLoadedChunks();
+        
+        foreach (var loadedChunk in loadedChunks)
         {
-            // Find chunks to remove (no longer desired)
-            var chunksToRemove = new List<(int X, int Z)>();
-            foreach (var chunk in _desiredChunks)
+            if (!currentDesired.Contains(loadedChunk))
             {
-                if (!newDesiredChunks.Contains(chunk))
-                {
-                    chunksToRemove.Add(chunk);
-                }
-            }
-            
-            // Cancel loads for chunks that are no longer desired
-            lock (_activeLoadsLock)
-            {
-                foreach (var chunk in chunksToRemove)
-                {
-                    if (_activeLoads.TryGetValue(chunk, out var cts))
-                    {
-                        cts.Cancel();
-                        cts.Dispose();
-                        _activeLoads.Remove(chunk);
-                    }
-                }
-            }
-            
-            // Unload chunks that are no longer desired
-            foreach (var chunk in chunksToRemove)
-            {
-                UnloadChunk(chunk.X, chunk.Z);
-            }
-            
-            // Update desired chunks set
-            _desiredChunks.Clear();
-            foreach (var chunk in newDesiredChunks)
-            {
-                _desiredChunks.Add(chunk);
+                UnloadChunk(loadedChunk.X, loadedChunk.Z);
             }
         }
-        
-        // Trigger background loading task to process new chunks
-        // (It will check desired chunks and start loading if needed)
     }
 
     /// <summary>
-    /// Starts the background loading task that processes the chunk loading queue.
+    /// Forces immediate processing of pending updates (bypasses debounce).
+    /// Useful for spawn chunks that need immediate loading.
+    /// </summary>
+    public void ProcessUpdatesImmediately()
+    {
+        int playerChunkX = _player.ChunkX;
+        int playerChunkZ = _player.ChunkZ;
+        
+        if (_requestManager.ProcessPendingUpdates(playerChunkX, playerChunkZ))
+        {
+            // Updates were processed, refresh worker queue
+            _workerPool.RefreshQueue();
+        }
+    }
+
+    /// <summary>
+    /// Starts the chunk loading system (worker pool, health monitor, and update processor).
     /// </summary>
     public void StartLoading()
     {
-        // Don't start if already running
-        if (_loadingTask != null && !_loadingTask.IsCompleted)
-        {
-            return;
-        }
+        // Start worker pool
+        _workerPool.Start();
         
-        // Start background task
-        _loadingTask = Task.Run(async () =>
+        // Start health monitor
+        _healthMonitor.Start();
+        
+        // Start update processor task (processes pending updates and refreshes queue)
+        if (_updateProcessorTask == null || _updateProcessorTask.IsCompleted)
         {
-            try
-            {
-                while (!_shutdownToken.Token.IsCancellationRequested)
-                {
-                    // Get chunks that need loading
-                    var chunksToLoad = new List<(int X, int Z)>();
-                    
-                    lock (_desiredChunksLock)
-                    {
-                        foreach (var chunk in _desiredChunks)
-                        {
-                            // Check if already loaded
-                            if (IsChunkLoaded(chunk.X, chunk.Z))
-                            {
-                                continue;
-                            }
-                            
-                            // Check if already loading
-                            lock (_activeLoadsLock)
-                            {
-                                if (_activeLoads.ContainsKey(chunk))
-                                {
-                                    continue;
-                                }
-                            }
-                            
-                            chunksToLoad.Add(chunk);
-                        }
-                    }
-                    
-                    // Start loading tasks for chunks that need loading
-                    foreach (var (chunkX, chunkZ) in chunksToLoad)
-                    {
-                        // Check shutdown token
-                        if (_shutdownToken.Token.IsCancellationRequested)
-                        {
-                            break;
-                        }
-                        
-                        // Create cancellation token for this specific chunk load
-                        var chunkCts = CancellationTokenSource.CreateLinkedTokenSource(_shutdownToken.Token);
-                        
-                        // Add to active loads
-                        lock (_activeLoadsLock)
-                        {
-                            // Double-check it's still needed
-                            lock (_desiredChunksLock)
-                            {
-                                if (!_desiredChunks.Contains((chunkX, chunkZ)) || IsChunkLoaded(chunkX, chunkZ))
-                                {
-                                    chunkCts.Dispose();
-                                    continue;
-                                }
-                            }
-                            
-                            _activeLoads[(chunkX, chunkZ)] = chunkCts;
-                        }
-                        
-                        // Start loading task (fire and forget, but tracked via activeLoads)
-                        _ = Task.Run(async () =>
-                        {
-                            try
-                            {
-                                await LoadChunkAsync(chunkX, chunkZ, chunkCts.Token);
-                            }
-                            catch (OperationCanceledException)
-                            {
-                                // Expected when chunk is removed from desired set
-                            }
-                            catch (Exception ex)
-                            {
-                                Console.WriteLine($"  │  ✗ Error loading chunk ({chunkX}, {chunkZ}): {ex.Message}");
-                            }
-                            finally
-                            {
-                                // Remove from active loads
-                                lock (_activeLoadsLock)
-                                {
-                                    if (_activeLoads.TryGetValue((chunkX, chunkZ), out var cts))
-                                    {
-                                        cts.Dispose();
-                                        _activeLoads.Remove((chunkX, chunkZ));
-                                    }
-                                }
-                            }
-                        });
-                    }
-                    
-                    // Wait a bit before checking again (avoid busy-waiting)
-                    await Task.Delay(100, _shutdownToken.Token);
-                }
-            }
-            catch (OperationCanceledException)
-            {
-                // Expected when shutdown is requested
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"  │  ✗ Error in chunk loader background task: {ex.Message}");
-            }
-        });
+            _updateProcessorTask = Task.Run(async () => await UpdateProcessorLoop(_shutdownToken.Token));
+        }
     }
 
     /// <summary>
-    /// Loads a single chunk asynchronously.
-    /// Checks cancellation token and verifies chunk is still desired before marking as loaded.
+    /// Background task that processes pending updates and refreshes the worker queue.
     /// </summary>
-    private async Task LoadChunkAsync(int chunkX, int chunkZ, CancellationToken cancellationToken)
+    private async Task UpdateProcessorLoop(CancellationToken cancellationToken)
     {
-        // Check cancellation before starting
-        cancellationToken.ThrowIfCancellationRequested();
-        
-        // Verify chunk is still desired
-        lock (_desiredChunksLock)
+        try
         {
-            if (!_desiredChunks.Contains((chunkX, chunkZ)))
+            while (!cancellationToken.IsCancellationRequested)
             {
-                throw new OperationCanceledException($"Chunk ({chunkX}, {chunkZ}) is no longer desired");
+                // Process pending updates (debounced)
+                int playerChunkX = _player.ChunkX;
+                int playerChunkZ = _player.ChunkZ;
+                
+                if (_requestManager.ProcessPendingUpdates(playerChunkX, playerChunkZ))
+                {
+                    // Updates were processed, refresh worker queue with new requests
+                    _workerPool.RefreshQueue();
+                }
+                
+                // Also refresh queue periodically to pick up any new queued requests
+                await Task.Delay(100, cancellationToken);
             }
         }
-        
-        // Send chunk data
-        await _playHandler.SendChunkDataForLoaderAsync(_connection, chunkX, chunkZ);
-        
-        // Check cancellation again after send
-        cancellationToken.ThrowIfCancellationRequested();
-        
-        // Verify chunk is still desired before marking as loaded
-        bool stillDesired;
-        lock (_desiredChunksLock)
+        catch (OperationCanceledException)
         {
-            stillDesired = _desiredChunks.Contains((chunkX, chunkZ));
+            // Expected when shutdown is requested
         }
-        
-        if (!stillDesired)
+        catch (Exception ex)
         {
-            // Chunk was removed from desired set during send - don't mark as loaded
-            throw new OperationCanceledException($"Chunk ({chunkX}, {chunkZ}) was removed from desired set during load");
-        }
-        
-        // Mark as loaded (thread-safe)
-        lock (_loadedChunksLock)
-        {
-            if (_loadedChunks.Add((chunkX, chunkZ)))
-            {
-                // Also update player's loaded chunks
-                _player.MarkChunkLoaded(chunkX, chunkZ);
-            }
+            Console.WriteLine($"  │  ✗ Error in update processor: {ex.Message}");
         }
     }
 
@@ -263,49 +148,39 @@ public class ChunkLoader
     /// </summary>
     public void UnloadChunk(int chunkX, int chunkZ)
     {
-        lock (_loadedChunksLock)
-        {
-            if (_loadedChunks.Remove((chunkX, chunkZ)))
-            {
-                // Also remove from player's loaded chunks
-                _player.MarkChunkUnloaded(chunkX, chunkZ);
-                
-                // TODO: Send unload chunk packet if needed
-                // For now, Minecraft client handles this automatically when chunks go out of range
-            }
-        }
+        // Remove from player's loaded chunks
+        _player.MarkChunkUnloaded(chunkX, chunkZ);
+        
+        // Cancel request if it exists
+        _requestManager.CancelRequest(chunkX, chunkZ);
+        
+        // TODO: Send unload chunk packet if needed
+        // For now, Minecraft client handles this automatically when chunks go out of range
     }
 
     /// <summary>
     /// Shuts down the chunk loader.
-    /// Cancels all active loads and stops the background task.
+    /// Stops worker pool, health monitor, and update processor.
     /// </summary>
     public void Shutdown()
     {
-        // Cancel shutdown token to stop background task
+        // Cancel shutdown token
         _shutdownToken.Cancel();
         
-        // Cancel all active loads
-        lock (_activeLoadsLock)
-        {
-            foreach (var kvp in _activeLoads)
-            {
-                kvp.Value.Cancel();
-                kvp.Value.Dispose();
-            }
-            _activeLoads.Clear();
-        }
+        // Stop all components
+        _workerPool.Stop();
+        _healthMonitor.Stop();
         
-        // Wait for background task to complete (with timeout)
-        if (_loadingTask != null)
+        // Wait for update processor task
+        if (_updateProcessorTask != null)
         {
             try
             {
-                _loadingTask.Wait(TimeSpan.FromSeconds(2));
+                _updateProcessorTask.Wait(TimeSpan.FromSeconds(2));
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"  │  ⚠ Warning: Error waiting for chunk loader shutdown: {ex.Message}");
+                Console.WriteLine($"  │  ⚠ Warning: Error waiting for update processor shutdown: {ex.Message}");
             }
         }
         
@@ -317,10 +192,8 @@ public class ChunkLoader
     /// </summary>
     public HashSet<(int X, int Z)> GetLoadedChunks()
     {
-        lock (_loadedChunksLock)
-        {
-            return new HashSet<(int X, int Z)>(_loadedChunks);
-        }
+        // Get loaded chunks from player (which is updated by worker pool)
+        return new HashSet<(int X, int Z)>(_player.LoadedChunks);
     }
 
     /// <summary>
@@ -328,10 +201,10 @@ public class ChunkLoader
     /// </summary>
     public bool IsChunkLoaded(int chunkX, int chunkZ)
     {
-        lock (_loadedChunksLock)
-        {
-            return _loadedChunks.Contains((chunkX, chunkZ));
-        }
+        return _player.IsChunkLoaded(chunkX, chunkZ);
     }
 }
+
+
+
 

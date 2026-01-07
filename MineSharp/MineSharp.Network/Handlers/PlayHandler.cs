@@ -123,6 +123,9 @@ public class PlayHandler
         // Update ChunkLoader with spawn chunks (will start loading them)
         connection.ChunkLoader.UpdateDesiredChunks(spawnChunks);
         
+        // Force immediate processing (bypass debounce for spawn chunks)
+        connection.ChunkLoader.ProcessUpdatesImmediately();
+        
         // Wait for all spawn chunks to be loaded (synchronous wait for immediate spawn)
         int maxWaitTime = 5000; // 5 seconds max wait
         int waitInterval = 50; // Check every 50ms
