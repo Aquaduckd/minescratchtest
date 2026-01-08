@@ -15,6 +15,7 @@ public class Server
     private readonly RegistryManager _registryManager;
     private readonly LootTableManager _lootTableManager;
     private readonly ServerConfiguration _configuration;
+    private CancellationTokenSource? _tickLoopCancellation;
 
     public Server(ServerConfiguration configuration)
     {
@@ -86,12 +87,19 @@ public class Server
         // Start TCP server
         await _tcpServer.StartAsync();
         
+        // Start world update loop
+        StartWorldUpdateLoop();
+        
         Console.WriteLine("Server started successfully!");
     }
 
     public void Stop()
     {
         Console.WriteLine("Stopping server...");
+        
+        // Stop world update loop
+        _tickLoopCancellation?.Cancel();
+        
         _tcpServer.Stop();
         Console.WriteLine("Server stopped");
     }
@@ -117,7 +125,52 @@ public class Server
     private void StartWorldUpdateLoop()
     {
         // TODO: Implement world update loop (20 TPS)
-        // Will be implemented when we add world state management
+        // - Create CancellationTokenSource
+        // - Run background task that loops at 20 TPS (50ms per tick)
+        // - Call _world.Tick() each iteration
+        // - Handle cancellation gracefully
+        // - Add error handling and logging
+        
+        _tickLoopCancellation = new CancellationTokenSource();
+        var cancellationToken = _tickLoopCancellation.Token;
+        
+        // Start background task for world updates
+        _ = Task.Run(async () =>
+        {
+            const int tickIntervalMs = 50; // 20 TPS = 50ms per tick
+            var lastTickTime = DateTime.UtcNow;
+            
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                try
+                {
+                    var currentTime = DateTime.UtcNow;
+                    var deltaTime = currentTime - lastTickTime;
+                    lastTickTime = currentTime;
+                    
+                    // Tick world (updates time, entities, etc.)
+                    // Note: We don't broadcast time here - the client automatically advances time at 20 TPS
+                    // We only send Update Time packet when:
+                    // 1. Player connects (in SendInitialPlayPacketsAsync)
+                    // 2. Time is manually changed (via BroadcastUpdateTimeAsync)
+                    _world.Tick(deltaTime);
+                    
+                    // Wait for next tick
+                    await Task.Delay(tickIntervalMs, cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    // Expected when cancellation is requested
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    // Log error but continue loop
+                    Console.WriteLine($"Error in world update loop: {ex.Message}");
+                    // Continue loop even on error
+                }
+            }
+        }, cancellationToken);
     }
 }
 

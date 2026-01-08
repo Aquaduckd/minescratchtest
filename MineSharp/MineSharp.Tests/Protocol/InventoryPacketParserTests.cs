@@ -44,15 +44,16 @@ public class InventoryPacketParserTests
         // Test slot data with item via SetCreativeModeSlot packet
         // Set Creative Mode Slot (0x37) with item:
         // - Short: Slot (5)
-        // - SlotData: Item ID 10, Count 64, No NBT
+        // - SlotData: Modern format - Item ID 10, Count 64, No components
         var packetData = new List<byte>();
         packetData.AddRange(WriteVarInt(0)); // Placeholder
         packetData.AddRange(WriteVarInt(0x37)); // Packet ID
         packetData.AddRange(WriteShort(5)); // Slot
-        packetData.Add(0x01); // SlotData: Present = true
+        // Modern SlotData format:
+        packetData.AddRange(WriteVarInt(64)); // Item Count
         packetData.AddRange(WriteVarInt(10)); // Item ID
-        packetData.Add(64); // Count
-        packetData.Add(0x00); // No NBT
+        packetData.AddRange(WriteVarInt(0)); // Components to add (0)
+        packetData.AddRange(WriteVarInt(0)); // Components to remove (0)
         
         // Fix packet length
         int bodyLength = packetData.Count - 1;
@@ -188,15 +189,16 @@ public class InventoryPacketParserTests
     {
         // Set Creative Mode Slot (0x37) with item:
         // - Short: Slot (5)
-        // - SlotData: Item ID 10, Count 64, No NBT
+        // - SlotData: Modern format - Item ID 10, Count 64, No components
         var packetData = new List<byte>();
         packetData.AddRange(WriteVarInt(0)); // Placeholder
         packetData.AddRange(WriteVarInt(0x37)); // Packet ID
         packetData.AddRange(WriteShort(5)); // Slot
-        packetData.Add(0x01); // SlotData: Present = true
+        // Modern SlotData format:
+        packetData.AddRange(WriteVarInt(64)); // Item Count
         packetData.AddRange(WriteVarInt(10)); // Item ID
-        packetData.Add(64); // Count
-        packetData.Add(0x00); // No NBT
+        packetData.AddRange(WriteVarInt(0)); // Components to add (0)
+        packetData.AddRange(WriteVarInt(0)); // Components to remove (0)
         
         // Fix packet length
         int bodyLength = packetData.Count - 1;

@@ -161,8 +161,17 @@ public class PlayHandler
             Console.WriteLine("  │  ✓ ChunkLoader created and started");
         }
         
-        // Send Update Time
-        await SendUpdateTimeAsync(connection, 0, 6000, true);
+        // Send Update Time (client will automatically advance time at 20 TPS)
+        if (_world != null)
+        {
+            var timeManager = _world.TimeManager;
+            await SendUpdateTimeAsync(connection, timeManager.WorldAge, timeManager.TimeOfDay, timeManager.TimeIncreasing);
+        }
+        else
+        {
+            // Fallback to default values if world is not available
+            await SendUpdateTimeAsync(connection, 0, 6000, true);
+        }
         
         // Send Game Event (event 13: "Start waiting for level chunks")
         // This tells the client to wait for chunks before rendering
@@ -421,6 +430,60 @@ public class PlayHandler
         {
             Console.WriteLine($"  │  ✗ Error sending Update Time: {ex.Message}");
             throw;
+        }
+    }
+
+    /// <summary>
+    /// Broadcasts the current world time to all connected players.
+    /// This should only be called when time is manually changed (e.g., via commands)
+    /// or when time ticking is paused/resumed. The client automatically advances time
+    /// at 20 TPS, so we don't need to send periodic updates.
+    /// </summary>
+    public async Task BroadcastUpdateTimeAsync()
+    {
+        if (_world == null || _getAllConnections == null)
+        {
+            // Cannot broadcast without world or connection getter
+            return;
+        }
+        
+        var timeManager = _world.TimeManager;
+        var worldAge = timeManager.WorldAge;
+        var timeOfDay = timeManager.TimeOfDay;
+        var timeIncreasing = timeManager.TimeIncreasing;
+        
+        var connections = _getAllConnections().ToList();
+        
+        if (connections.Count == 0)
+        {
+            // No connections to broadcast to
+            return;
+        }
+        
+        // Build the Update Time packet once
+        var updateTimePacket = PacketBuilder.BuildUpdateTimePacket(worldAge, timeOfDay, timeIncreasing);
+        
+        // Send to all connections
+        var tasks = new List<Task>();
+        foreach (var connection in connections)
+        {
+            tasks.Add(SendUpdateTimeToConnectionAsync(connection, updateTimePacket));
+        }
+        
+        // Wait for all sends to complete (or fail)
+        await Task.WhenAll(tasks);
+    }
+    
+    private async Task SendUpdateTimeToConnectionAsync(ClientConnection connection, byte[] packet)
+    {
+        try
+        {
+            await connection.SendPacketAsync(packet);
+        }
+        catch (Exception ex)
+        {
+            // Log but don't throw - individual connection failures shouldn't stop the broadcast
+            Console.WriteLine($"  │  ✗ Error sending Update Time to connection: {ex.Message}");
         }
     }
 

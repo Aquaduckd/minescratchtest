@@ -13,11 +13,13 @@ public class World
     private readonly EntityManager _entityManager;
     private readonly ChunkManager _chunkManager;
     private readonly BlockManager _blockManager;
+    private readonly TimeManager _timeManager;
 
     public PlayerManager PlayerManager => _playerManager;
     public EntityManager EntityManager => _entityManager;
     public ChunkManager ChunkManager => _chunkManager;
     public BlockManager BlockManager => _blockManager;
+    public TimeManager TimeManager => _timeManager;
 
     public World(int viewDistance = 10, ITerrainGenerator? generator = null)
     {
@@ -28,6 +30,9 @@ public class World
         // Use provided generator, or default to flat world generator
         generator ??= new Generation.Generators.FlatWorldGenerator();
         _blockManager = new BlockManager(generator);
+        
+        // Initialize time manager with default noon time
+        _timeManager = new TimeManager(initialTimeOfDay: 6000, timeIncreasing: true);
     }
 
     // Legacy constructor - kept for backward compatibility
@@ -37,6 +42,9 @@ public class World
         _entityManager = new EntityManager();
         _chunkManager = new ChunkManager(viewDistance);
         _blockManager = new BlockManager(useTerrainGeneration);
+        
+        // Initialize time manager with default noon time
+        _timeManager = new TimeManager(initialTimeOfDay: 6000, timeIncreasing: true);
     }
 
     public Player? GetPlayer(Guid uuid)
@@ -61,8 +69,12 @@ public class World
 
     public void Tick(TimeSpan deltaTime)
     {
-        // TODO: Implement world tick (updates entities, etc.)
-        throw new NotImplementedException();
+        // TODO: Implement world tick logic
+        // - Call _timeManager.Tick() to advance time
+        // - Update entities
+        // - Update block ticks
+        // For now, just advance time
+        _timeManager.Tick();
     }
 }
 
