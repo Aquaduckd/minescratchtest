@@ -94,7 +94,7 @@ public class TcpServer
                         {
                             try
                             {
-                                await _packetHandler.PlayHandler.OnPlayerDisconnectedAsync(connection.Player);
+                                await _packetHandler.PlayHandler.OnPlayerDisconnectedAsync(connection.Player, connection.Username);
                             }
                             catch (Exception ex)
                             {

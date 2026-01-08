@@ -205,6 +205,14 @@ public class PlayHandler
             await _visibilityManager.OnPlayerJoinedAsync(connection, connection.Player);
         }
         
+        // Broadcast join message to all players (for both new players and reconnections)
+        if (connection.Player != null && connection.Username != null)
+        {
+            // Format message: "{playerName} joined the game" with yellow color
+            var joinMessage = $"{{\"text\":\"{connection.Username} joined the game\",\"color\":\"yellow\"}}";
+            await BroadcastSystemChatMessageAsync(joinMessage, overlay: false);
+        }
+        
         // Broadcast equipment to other players when this player joins
         // Send this player's equipment to all existing players
         if (connection.Player != null && _world != null)
@@ -487,6 +495,94 @@ public class PlayHandler
         }
     }
 
+    /// <summary>
+    /// Broadcasts a system chat message to all connected players.
+    /// </summary>
+    /// <param name="messageJson">Message content as JSON text component (e.g., {"text":"Hello"})</param>
+    /// <param name="overlay">If true, displays message above hotbar instead of in chat</param>
+    public async Task BroadcastSystemChatMessageAsync(string messageJson, bool overlay = false)
+    {
+        if (_getAllConnections == null)
+        {
+            // Cannot broadcast without connection getter
+            Console.WriteLine($"  │  ⚠ Cannot broadcast System Chat Message: no connection getter available");
+            return;
+        }
+        
+        var connections = _getAllConnections().ToList();
+        
+        // Extract message text for logging (simple extraction from JSON)
+        var messageText = ExtractTextFromJson(messageJson);
+        var overlayText = overlay ? " (overlay)" : "";
+        
+        if (connections.Count == 0)
+        {
+            // No connections to broadcast to, but still log the attempt
+            Console.WriteLine($"  │  → Broadcasting System Chat Message{overlayText}: \"{messageText}\" to 0 player(s) (no connections)");
+            return;
+        }
+        
+        Console.WriteLine($"  │  → Broadcasting System Chat Message{overlayText}: \"{messageText}\" to {connections.Count} player(s)");
+        
+        // Build the System Chat Message packet once
+        var chatPacket = PacketBuilder.BuildSystemChatMessagePacket(messageJson, overlay);
+        
+        // Send to all connections
+        var tasks = new List<Task>();
+        foreach (var connection in connections)
+        {
+            tasks.Add(SendSystemChatMessageToConnectionAsync(connection, chatPacket));
+        }
+        
+        // Wait for all sends to complete (or fail)
+        await Task.WhenAll(tasks);
+        
+        Console.WriteLine($"  │  ✓ System Chat Message broadcast complete ({chatPacket.Length} bytes)");
+    }
+    
+    /// <summary>
+    /// Extracts the text content from a simple JSON text component for logging purposes.
+    /// Handles basic format: {"text":"message"}
+    /// </summary>
+    private string ExtractTextFromJson(string messageJson)
+    {
+        // Simple extraction for logging - just try to find the text value
+        // This is a basic implementation for display purposes only
+        try
+        {
+            var textStart = messageJson.IndexOf("\"text\":\"", StringComparison.Ordinal);
+            if (textStart >= 0)
+            {
+                textStart += 8; // Length of "text":"
+                var textEnd = messageJson.IndexOf("\"", textStart, StringComparison.Ordinal);
+                if (textEnd > textStart)
+                {
+                    return messageJson.Substring(textStart, textEnd - textStart);
+                }
+            }
+        }
+        catch
+        {
+            // If extraction fails, just return a truncated version of the JSON
+        }
+        
+        // Fallback: return truncated JSON if extraction fails
+        return messageJson.Length > 50 ? messageJson.Substring(0, 50) + "..." : messageJson;
+    }
+    
+    private async Task SendSystemChatMessageToConnectionAsync(ClientConnection connection, byte[] packet)
+    {
+        try
+        {
+            await connection.SendPacketAsync(packet);
+        }
+        catch (Exception ex)
+        {
+            // Log but don't throw - individual connection failures shouldn't stop the broadcast
+            Console.WriteLine($"  │  ✗ Error sending System Chat Message to connection: {ex.Message}");
+        }
+    }
+
     public async Task SendGameEventAsync(ClientConnection connection, byte eventId, float value)
     {
         Console.WriteLine($"  │  → Sending Game Event (event {eventId})...");
@@ -636,11 +732,20 @@ public class PlayHandler
     /// Called when a player disconnects.
     /// Notifies the visibility manager to despawn the player for all other players.
     /// </summary>
-    public async Task OnPlayerDisconnectedAsync(Player disconnectedPlayer)
+    /// <param name="disconnectedPlayer">The player that disconnected</param>
+    /// <param name="username">The username of the disconnected player (optional, for leave message)</param>
+    public async Task OnPlayerDisconnectedAsync(Player disconnectedPlayer, string? username = null)
     {
         if (_visibilityManager != null && disconnectedPlayer != null)
         {
             await _visibilityManager.OnPlayerDisconnectedAsync(disconnectedPlayer);
+        }
+        
+        // Broadcast leave message to all remaining players
+        if (username != null)
+        {
+            var leaveMessage = $"{{\"text\":\"{username} left the game\",\"color\":\"yellow\"}}";
+            await BroadcastSystemChatMessageAsync(leaveMessage, overlay: false);
         }
     }
 

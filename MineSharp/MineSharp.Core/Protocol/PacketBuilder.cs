@@ -592,6 +592,35 @@ public class PacketBuilder
         return finalWriter.ToArray();
     }
 
+    /// <summary>
+    /// Builds a System Chat Message packet (0x77, clientbound).
+    /// Used for server-generated messages like announcements and command outputs.
+    /// </summary>
+    /// <param name="messageJson">Message content as JSON text component (e.g., {"text":"Hello"})</param>
+    /// <param name="overlay">If true, displays message above hotbar instead of in chat</param>
+    /// <returns>Packet data with length prefix</returns>
+    public static byte[] BuildSystemChatMessagePacket(string messageJson, bool overlay = false)
+    {
+        var packetWriter = new ProtocolWriter();
+        packetWriter.WriteVarInt(0x77); // System Chat Message packet ID
+        
+        // Message Content (Text Component) - encoded as NBT binary format
+        // Convert JSON text component to NBT binary
+        byte[] nbtData = NbtWriter.JsonTextComponentToNbt(messageJson);
+        packetWriter.WriteBytes(nbtData);
+        
+        // Overlay (Boolean) - Display above hotbar instead of chat
+        packetWriter.WriteBool(overlay);
+        
+        // Build final packet with length prefix
+        var packetData = packetWriter.ToArray();
+        var finalWriter = new ProtocolWriter();
+        finalWriter.WriteVarInt(packetData.Length);
+        finalWriter.WriteBytes(packetData);
+        
+        return finalWriter.ToArray();
+    }
+
     public static byte[] BuildGameEventPacket(
         byte eventId = 13, // 13 = "Start waiting for level chunks"
         float value = 0.0f)
