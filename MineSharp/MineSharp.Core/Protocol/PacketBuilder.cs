@@ -1056,6 +1056,49 @@ public class PacketBuilder
     }
 
     /// <summary>
+    /// Builds a World Event packet (0x2D, clientbound).
+    /// Used to play sound effects and particle effects at a location.
+    /// </summary>
+    /// <param name="blockX">Block X coordinate</param>
+    /// <param name="blockY">Block Y coordinate</param>
+    /// <param name="blockZ">Block Z coordinate</param>
+    /// <param name="eventId">Event ID (e.g., 2001 = Block break + block break sound)</param>
+    /// <param name="data">Extra data for the event (e.g., block state ID for block break events)</param>
+    /// <param name="disableRelativeVolume">Whether to disable relative volume adjustment</param>
+    public static byte[] BuildWorldEventPacket(int blockX, int blockY, int blockZ, int eventId, int data, bool disableRelativeVolume = false)
+    {
+        // World Event packet structure (0x2D):
+        // 1. Event (Int)
+        // 2. Location (Position - encoded as Long)
+        // 3. Data (Int)
+        // 4. Disable Relative Volume (Boolean)
+        
+        var packetWriter = new ProtocolWriter();
+        packetWriter.WriteVarInt(0x2D); // Packet ID
+        
+        // Write event ID
+        packetWriter.WriteInt(eventId);
+        
+        // Write position as encoded long
+        var position = new Position(blockX, blockY, blockZ);
+        packetWriter.WriteLong(position.ToLong());
+        
+        // Write data
+        packetWriter.WriteInt(data);
+        
+        // Write disable relative volume flag
+        packetWriter.WriteBool(disableRelativeVolume);
+        
+        // Build final packet with length prefix
+        var packetData = packetWriter.ToArray();
+        var finalWriter = new ProtocolWriter();
+        finalWriter.WriteVarInt(packetData.Length);
+        finalWriter.WriteBytes(packetData);
+        
+        return finalWriter.ToArray();
+    }
+
+    /// <summary>
     /// Builds a Block Update packet (0x08, clientbound).
     /// Sent to clients when a block changes within their render distance.
     /// </summary>

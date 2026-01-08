@@ -594,6 +594,14 @@ public class PlayHandler
             {
                 Console.WriteLine($"  │  → Creative mode: Block broken instantly! Recording change...");
                 
+                // Get the original block state ID before breaking (for world event sound)
+                int originalBlockStateId = 0;
+                if (_world != null)
+                {
+                    var originalBlock = _world.BlockManager.GetBlock(blockX, blockY, blockZ);
+                    originalBlockStateId = originalBlock?.BlockStateId ?? 0;
+                }
+                
                 // Record the block change (set to air) in chunk diff system
                 ChunkDiffManager.Instance.RecordBlockChange(blockX, blockY, blockZ, 0); // 0 = air
                 
@@ -602,11 +610,15 @@ public class PlayHandler
                 {
                     _world.BlockManager.SetBlock(blockX, blockY, blockZ, Block.Air());
                     
-                    // Clear any destroy stage animation (stage 10+ removes it)
+                    // Clear the destroy stage animation (stage 10+ removes it)
                     await BroadcastBlockDestroyStageAsync(blockX, blockY, blockZ, entityId, 10);
                     
                     // Broadcast block change to all players with this chunk loaded
                     await BroadcastBlockChangeAsync(blockX, blockY, blockZ, 0);
+                    
+                    // Send World Event for block break sound and particles
+                    // Event 2001 = Block break + block break sound, data = original block state ID
+                    await BroadcastWorldEventAsync(blockX, blockY, blockZ, 2001, originalBlockStateId);
                 }
                 
                 Console.WriteLine($"  │  ✓ Block change recorded and applied");
@@ -629,6 +641,14 @@ public class PlayHandler
             // Survival mode: Block is broken
             Console.WriteLine($"  │  → Survival mode: Block broken! Recording change...");
             
+            // Get the original block state ID before breaking (for world event sound)
+            int originalBlockStateId = 0;
+            if (_world != null)
+            {
+                var originalBlock = _world.BlockManager.GetBlock(blockX, blockY, blockZ);
+                originalBlockStateId = originalBlock?.BlockStateId ?? 0;
+            }
+            
             // Record the block change (set to air) in chunk diff system
             ChunkDiffManager.Instance.RecordBlockChange(blockX, blockY, blockZ, 0); // 0 = air
             
@@ -642,6 +662,10 @@ public class PlayHandler
                 
                 // Broadcast block change to all players with this chunk loaded
                 await BroadcastBlockChangeAsync(blockX, blockY, blockZ, 0);
+                
+                // Send World Event for block break sound and particles
+                // Event 2001 = Block break + block break sound, data = original block state ID
+                await BroadcastWorldEventAsync(blockX, blockY, blockZ, 2001, originalBlockStateId);
             }
             
             Console.WriteLine($"  │  ✓ Block change recorded and applied");
@@ -1446,6 +1470,9 @@ public class PlayHandler
         var allConnections = _getAllConnections().ToList();
         int broadcastCount = 0;
 
+        string stageDesc = destroyStage < 10 ? $"stage {destroyStage}" : "clear animation (10+)";
+        Console.WriteLine($"  │  → Sending Set Block Destroy Stage (0x05): Entity {entityId}, Block ({blockX}, {blockY}, {blockZ}), {stageDesc}");
+
         foreach (var connection in allConnections)
         {
             // Check if this connection's player has the chunk loaded
@@ -1456,6 +1483,7 @@ public class PlayHandler
                     var packet = PacketBuilder.BuildSetBlockDestroyStagePacket(entityId, blockX, blockY, blockZ, destroyStage);
                     await connection.SendPacketAsync(packet);
                     broadcastCount++;
+                    Console.WriteLine($"  │    → Sent to player {connection.PlayerUuid} (Entity {connection.Player.EntityId})");
                 }
                 catch (Exception ex)
                 {
@@ -1466,8 +1494,58 @@ public class PlayHandler
 
         if (broadcastCount > 0)
         {
-            string stageDesc = destroyStage < 10 ? $"stage {destroyStage}" : "clear animation";
-            Console.WriteLine($"  │  → Broadcast destroy stage ({stageDesc}) to {broadcastCount} player(s) with chunk ({chunkX}, {chunkZ}) loaded");
+            Console.WriteLine($"  │  ✓ Broadcast destroy stage ({stageDesc}) to {broadcastCount} player(s) with chunk ({chunkX}, {chunkZ}) loaded");
+        }
+        else
+        {
+            Console.WriteLine($"  │  ⚠ No players with chunk ({chunkX}, {chunkZ}) loaded to receive destroy stage");
+        }
+    }
+
+    /// <summary>
+    /// Broadcasts a world event (sound/particle effect) to all players who have the chunk containing the block loaded.
+    /// </summary>
+    private async Task BroadcastWorldEventAsync(int blockX, int blockY, int blockZ, int eventId, int data, bool disableRelativeVolume = false)
+    {
+        if (_world == null || _getAllConnections == null)
+            return;
+
+        // Calculate which chunk this block is in
+        int chunkX = (int)Math.Floor(blockX / 16.0);
+        int chunkZ = (int)Math.Floor(blockZ / 16.0);
+
+        // Get all connections
+        var allConnections = _getAllConnections().ToList();
+        int broadcastCount = 0;
+
+        Console.WriteLine($"  │  → Sending World Event (0x2D): Event {eventId}, Block ({blockX}, {blockY}, {blockZ}), Data {data}");
+
+        foreach (var connection in allConnections)
+        {
+            // Check if this connection's player has the chunk loaded
+            if (connection.Player != null && connection.Player.IsChunkLoaded(chunkX, chunkZ))
+            {
+                try
+                {
+                    var packet = PacketBuilder.BuildWorldEventPacket(blockX, blockY, blockZ, eventId, data, disableRelativeVolume);
+                    await connection.SendPacketAsync(packet);
+                    broadcastCount++;
+                    Console.WriteLine($"  │    → Sent to player {connection.PlayerUuid} (Entity {connection.Player.EntityId})");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"  │  ✗ Error broadcasting world event to player {connection.PlayerUuid}: {ex.Message}");
+                }
+            }
+        }
+
+        if (broadcastCount > 0)
+        {
+            Console.WriteLine($"  │  ✓ Broadcast world event ({eventId}) to {broadcastCount} player(s) with chunk ({chunkX}, {chunkZ}) loaded");
+        }
+        else
+        {
+            Console.WriteLine($"  │  ⚠ No players with chunk ({chunkX}, {chunkZ}) loaded to receive world event");
         }
     }
 
