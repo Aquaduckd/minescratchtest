@@ -94,10 +94,42 @@ public class PacketHandler
             {
                 await _playHandler.HandleSetPlayerRotationAsync(connection, rotationPacket);
             }
+            else if (packetId == 0x28 && packet is PlayerActionPacket playerActionPacket) // Player Action
+            {
+                await _playHandler.HandlePlayerActionAsync(connection, playerActionPacket);
+            }
+            else if (packetId == 0x3F && packet is UseItemOnPacket useItemOnPacket) // Use Item On
+            {
+                await _playHandler.HandleUseItemOnAsync(connection, useItemOnPacket);
+            }
+            else if (packetId == 0x10 && packet is ClickContainerButtonPacket clickButtonPacket) // Click Container Button
+            {
+                await _playHandler.HandleClickContainerButtonAsync(connection, clickButtonPacket);
+            }
+            else if (packetId == 0x11 && packet is ClickContainerPacket clickContainerPacket) // Click Container
+            {
+                await _playHandler.HandleClickContainerAsync(connection, clickContainerPacket);
+            }
+            else if (packetId == 0x12 && packet is CloseContainerPacket closeContainerPacket) // Close Container (serverbound)
+            {
+                await _playHandler.HandleCloseContainerAsync(connection, closeContainerPacket);
+            }
+            else if (packetId == 0x34 && packet is SetHeldItemPacket setHeldItemPacket) // Set Held Item
+            {
+                await _playHandler.HandleSetHeldItemAsync(connection, setHeldItemPacket);
+            }
+            else if (packetId == 0x37 && packet is SetCreativeModeSlotPacket creativeSlotPacket) // Set Creative Mode Slot
+            {
+                await _playHandler.HandleSetCreativeModeSlotAsync(connection, creativeSlotPacket);
+            }
             else
             {
                 // TODO: Handle other PLAY state packets
-                Console.WriteLine($"  → PLAY state packet (ID: 0x{packetId:X2}) - not yet implemented");
+                // Suppress logging for packet 0x0C (likely keep-alive or similar frequent packet)
+                if (packetId != 0x0C)
+                {
+                    Console.WriteLine($"  → PLAY state packet (ID: 0x{packetId:X2}) - not yet implemented");
+                }
             }
         }
     }

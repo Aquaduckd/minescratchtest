@@ -41,8 +41,7 @@ public class World
 
     public Player? GetPlayer(Guid uuid)
     {
-        // TODO: Implement player retrieval
-        throw new NotImplementedException();
+        return _playerManager.GetPlayer(uuid);
     }
 
     public void AddPlayer(Player player)
@@ -52,14 +51,12 @@ public class World
 
     public void RemovePlayer(Guid uuid)
     {
-        // TODO: Implement player removal
-        throw new NotImplementedException();
+        _playerManager.RemovePlayer(uuid);
     }
 
     public List<Player> GetAllPlayers()
     {
-        // TODO: Implement get all players
-        throw new NotImplementedException();
+        return _playerManager.GetAllPlayers();
     }
 
     public void Tick(TimeSpan deltaTime)

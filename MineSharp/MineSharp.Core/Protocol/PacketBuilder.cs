@@ -948,6 +948,91 @@ public class PacketBuilder
     /// Builds a Rotate Head packet (0x51).
     /// Used for head rotation-only updates (head yaw).
     /// </summary>
+    private static void WriteSlotData(ProtocolWriter writer, SlotData slotData)
+    {
+        // Modern Slot Data format (1.20.5+):
+        // 1. VarInt: Item Count (if 0, slot is empty, no further fields)
+        // 2. VarInt: Item ID (only if count > 0)
+        // 3. VarInt: Number of components to add
+        // 4. VarInt: Number of components to remove
+        // 5. Array of components to add
+        // 6. Array of components to remove
+        
+        if (!slotData.Present || slotData.ItemCount == 0)
+        {
+            writer.WriteVarInt(0); // Item count = 0 means empty slot
+            return;
+        }
+        
+        writer.WriteVarInt(slotData.ItemCount); // Item count
+        writer.WriteVarInt(slotData.ItemId); // Item ID
+        writer.WriteVarInt(0); // Number of components to add (0 for now)
+        writer.WriteVarInt(0); // Number of components to remove (0 for now)
+        
+        // TODO: Write component data when we have it
+    }
+    
+    public static byte[] BuildSetContainerSlotPacket(byte windowId, int stateId, short slot, SlotData slotData)
+    {
+        // Set Container Slot (0x14, clientbound)
+        var packetWriter = new ProtocolWriter();
+        packetWriter.WriteVarInt(0x14); // Packet ID
+        packetWriter.WriteByte(windowId);
+        packetWriter.WriteVarInt(stateId);
+        packetWriter.WriteShort(slot);
+        
+        // Write SlotData using modern format
+        WriteSlotData(packetWriter, slotData);
+        
+        var packetData = packetWriter.ToArray();
+        var finalWriter = new ProtocolWriter();
+        finalWriter.WriteVarInt(packetData.Length);
+        finalWriter.WriteBytes(packetData);
+        
+        return finalWriter.ToArray();
+    }
+    
+    public static byte[] BuildSetContainerContentPacket(byte windowId, int stateId, List<SlotData> slots, SlotData carriedItem)
+    {
+        // Set Container Content (0x12, clientbound)
+        var packetWriter = new ProtocolWriter();
+        packetWriter.WriteVarInt(0x12); // Packet ID
+        packetWriter.WriteByte(windowId);
+        packetWriter.WriteVarInt(stateId);
+        packetWriter.WriteVarInt(slots.Count);
+        
+        // Write all slots using modern format
+        foreach (var slot in slots)
+        {
+            WriteSlotData(packetWriter, slot);
+        }
+        
+        // Write carried item using modern format
+        WriteSlotData(packetWriter, carriedItem);
+        
+        var packetData = packetWriter.ToArray();
+        var finalWriter = new ProtocolWriter();
+        finalWriter.WriteVarInt(packetData.Length);
+        finalWriter.WriteBytes(packetData);
+        
+        return finalWriter.ToArray();
+    }
+    
+    public static byte[] BuildSetHeldItemClientPacket(byte slot)
+    {
+        // Set Held Item (0x67, clientbound)
+        var packetWriter = new ProtocolWriter();
+        packetWriter.WriteVarInt(0x67); // Packet ID
+        packetWriter.WriteByte(slot);
+        
+        var packetData = packetWriter.ToArray();
+        var finalWriter = new ProtocolWriter();
+        finalWriter.WriteVarInt(packetData.Length);
+        finalWriter.WriteBytes(packetData);
+        
+        return finalWriter.ToArray();
+    }
+    
     public static byte[] BuildRotateHeadPacket(
         int entityId,
         float headYaw)
@@ -969,5 +1054,71 @@ public class PacketBuilder
 
         return finalWriter.ToArray();
     }
-}
 
+    /// <summary>
+    /// Builds a Block Update packet (0x08, clientbound).
+    /// Sent to clients when a block changes within their render distance.
+    /// </summary>
+    public static byte[] BuildBlockUpdatePacket(int blockX, int blockY, int blockZ, int blockStateId)
+    {
+        // Block Update packet structure (0x08):
+        // 1. Position (Long - encoded block coordinates)
+        // 2. Block ID (VarInt - block state ID)
+        
+        var packetWriter = new ProtocolWriter();
+        packetWriter.WriteVarInt(0x08); // Packet ID
+        
+        // Write position as encoded long
+        var position = new Position(blockX, blockY, blockZ);
+        packetWriter.WriteLong(position.ToLong());
+        
+        // Write block state ID
+        packetWriter.WriteVarInt(blockStateId);
+        
+        // Build final packet with length prefix
+        var packetData = packetWriter.ToArray();
+        var finalWriter = new ProtocolWriter();
+        finalWriter.WriteVarInt(packetData.Length);
+        finalWriter.WriteBytes(packetData);
+        
+        return finalWriter.ToArray();
+    }
+
+    /// <summary>
+    /// Builds a Set Block Destroy Stage packet (0x05, clientbound).
+    /// Used to show or hide the block breaking animation.
+    /// </summary>
+    /// <param name="entityId">The ID of the entity breaking the block (can be player's entity ID or a unique ID)</param>
+    /// <param name="blockX">Block X coordinate</param>
+    /// <param name="blockY">Block Y coordinate</param>
+    /// <param name="blockZ">Block Z coordinate</param>
+    /// <param name="destroyStage">0-9 for animation stages, 10+ to remove animation</param>
+    public static byte[] BuildSetBlockDestroyStagePacket(int entityId, int blockX, int blockY, int blockZ, byte destroyStage)
+    {
+        // Set Block Destroy Stage packet structure (0x05):
+        // 1. Entity ID (VarInt)
+        // 2. Location (Position - encoded as Long)
+        // 3. Destroy Stage (Unsigned Byte)
+        
+        var packetWriter = new ProtocolWriter();
+        packetWriter.WriteVarInt(0x05); // Packet ID
+        
+        // Write entity ID
+        packetWriter.WriteVarInt(entityId);
+        
+        // Write position as encoded long
+        var position = new Position(blockX, blockY, blockZ);
+        packetWriter.WriteLong(position.ToLong());
+        
+        // Write destroy stage
+        packetWriter.WriteByte(destroyStage);
+        
+        // Build final packet with length prefix
+        var packetData = packetWriter.ToArray();
+        var finalWriter = new ProtocolWriter();
+        finalWriter.WriteVarInt(packetData.Length);
+        finalWriter.WriteBytes(packetData);
+        
+        return finalWriter.ToArray();
+    }
+}

@@ -17,7 +17,12 @@ public class PlayerManager
 
     public void AddPlayer(Player player)
     {
-        _players.TryAdd(player.Uuid, player);
+        bool added = _players.TryAdd(player.Uuid, player);
+        if (!added)
+        {
+            // Player already exists - this is expected when reconnecting
+            // We'll reuse the existing player instead
+        }
     }
 
     public void RemovePlayer(Guid uuid)
@@ -27,8 +32,8 @@ public class PlayerManager
 
     public Player? GetPlayer(Guid uuid)
     {
-        _players.TryGetValue(uuid, out var player);
-        return player;
+        bool found = _players.TryGetValue(uuid, out var player);
+        return found ? player : null;
     }
 
     public List<Player> GetAllPlayers()

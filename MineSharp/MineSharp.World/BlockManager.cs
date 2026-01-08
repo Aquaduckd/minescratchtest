@@ -1,5 +1,6 @@
 using MineSharp.Core.DataTypes;
 using MineSharp.World.Generation;
+using MineSharp.World.ChunkDiffs;
 using System.Collections.Concurrent;
 using System.Linq;
 
@@ -78,6 +79,9 @@ public class BlockManager
             {
                 GenerateFlatWorldChunk(chunk);
             }
+            
+            // Apply chunk diffs after generation to restore player modifications
+            ChunkDiffManager.Instance.ApplyDiffsToChunk(chunk);
             
             return chunk;
         });

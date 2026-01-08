@@ -11,6 +11,8 @@ public class RegistryManager
     private List<string>? _biomes;
     private List<string>? _damageTypes;
     private Dictionary<string, Dictionary<string, JsonElement>>? _registryData;
+    private Dictionary<int, string>? _itemProtocolIdToName;
+    private Dictionary<string, int>? _blockDefaultStateIdByName;
 
     public void LoadRegistries(string dataPath)
     {
@@ -18,12 +20,14 @@ public class RegistryManager
         var biomesFile = Path.Combine(dataPath, "biomes.json");
         var damageTypesFile = Path.Combine(dataPath, "damage_types.json");
         var registryDataFile = Path.Combine(dataPath, "registry_data.json");
+        var blocksFile = Path.Combine(dataPath, "blocks.json");
 
         // Load registries.json (has protocol_id for each entry)
         if (File.Exists(registriesFile))
         {
             var registriesJson = DataLoader.LoadJson<Dictionary<string, JsonElement>>(registriesFile);
             _registries = new Dictionary<string, Dictionary<string, JsonElement>>();
+            _itemProtocolIdToName = new Dictionary<int, string>();
             
             foreach (var kvp in registriesJson)
             {
@@ -33,6 +37,19 @@ public class RegistryManager
                     foreach (var entry in entries.EnumerateObject())
                     {
                         entryDict[entry.Name] = entry.Value;
+
+                        // Build reverse lookup for items: protocol_id -> item identifier
+                        if (kvp.Key == "minecraft:item")
+                        {
+                            if (entry.Value.TryGetProperty("protocol_id", out var pidEl))
+                            {
+                                int pid = pidEl.GetInt32();
+                                if (!_itemProtocolIdToName.ContainsKey(pid))
+                                {
+                                    _itemProtocolIdToName[pid] = entry.Name;
+                                }
+                            }
+                        }
                     }
                     _registries[kvp.Key] = entryDict;
                 }
@@ -55,6 +72,59 @@ public class RegistryManager
         if (File.Exists(registryDataFile))
         {
             _registryData = DataLoader.LoadJson<Dictionary<string, Dictionary<string, JsonElement>>>(registryDataFile);
+        }
+
+        // Load blocks.json and precompute default state ids for each block
+        if (File.Exists(blocksFile))
+        {
+            try
+            {
+                var blocksJson = DataLoader.LoadJson<Dictionary<string, JsonElement>>(blocksFile);
+                _blockDefaultStateIdByName = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+                foreach (var kvp in blocksJson)
+                {
+                    var blockName = kvp.Key; // e.g. "minecraft:cobblestone"
+                    var blockObj = kvp.Value;
+                    if (blockObj.ValueKind != JsonValueKind.Object)
+                    {
+                        continue;
+                    }
+                    if (!blockObj.TryGetProperty("states", out var statesArray) || statesArray.ValueKind != JsonValueKind.Array)
+                    {
+                        continue;
+                    }
+
+                    int? defaultId = null;
+                    int? firstId = null;
+                    foreach (var state in statesArray.EnumerateArray())
+                    {
+                        if (state.TryGetProperty("id", out var idEl))
+                        {
+                            int id = idEl.GetInt32();
+                            firstId ??= id;
+                            if (state.TryGetProperty("default", out var defEl) && defEl.ValueKind == JsonValueKind.True)
+                            {
+                                defaultId = id;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (defaultId.HasValue)
+                    {
+                        _blockDefaultStateIdByName[blockName] = defaultId.Value;
+                    }
+                    else if (firstId.HasValue)
+                    {
+                        _blockDefaultStateIdByName[blockName] = firstId.Value;
+                    }
+                }
+            }
+            catch (Exception)
+            {
+                // If parsing fails, leave map null; callers must handle missing mapping
+            }
         }
     }
 
@@ -171,6 +241,50 @@ public class RegistryManager
             }
         }
         return null;
+    }
+
+    /// <summary>
+    /// Gets the registry entry name for a given protocol ID within a registry.
+    /// Currently implemented for the minecraft:item registry.
+    /// </summary>
+    public string? GetItemNameByProtocolId(int protocolId)
+    {
+        if (_itemProtocolIdToName != null && _itemProtocolIdToName.TryGetValue(protocolId, out var name))
+        {
+            return name;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Gets the default block state ID for a given block identifier (e.g., "minecraft:cobblestone").
+    /// Returns null if the block is unknown or block state data was not loaded.
+    /// </summary>
+    public int? GetDefaultBlockStateIdByBlockName(string blockName)
+    {
+        if (_blockDefaultStateIdByName != null && _blockDefaultStateIdByName.TryGetValue(blockName, out var id))
+        {
+            return id;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Resolves an item protocol ID to a default block state ID, if the item corresponds to a placeable block.
+    /// Returns null if the item does not map to a block.
+    /// </summary>
+    public int? ResolveBlockStateIdForItemProtocolId(int itemProtocolId)
+    {
+        // Lookup item identifier from protocol ID
+        var itemName = GetItemNameByProtocolId(itemProtocolId);
+        if (string.IsNullOrEmpty(itemName))
+        {
+            return null;
+        }
+
+        // Many block items share identical identifiers with blocks (e.g., "minecraft:stone")
+        var blockStateId = GetDefaultBlockStateIdByBlockName(itemName);
+        return blockStateId;
     }
 
     public List<string> GetRequiredRegistryIds()

@@ -18,6 +18,7 @@ public class Player
     public float HeadYaw { get; private set; }
     public int ViewDistance { get; }
     public Inventory Inventory { get; }
+    public byte GameMode { get; set; } // 0=Survival, 1=Creative, 2=Adventure, 3=Spectator
     public HashSet<(int X, int Z)> LoadedChunks { get; }
     private readonly HashSet<(int X, int Z)> _chunksLoadingInProgress = new HashSet<(int X, int Z)>();
     private readonly object _chunkLock = new object();
