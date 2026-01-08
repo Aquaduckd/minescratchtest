@@ -1532,6 +1532,103 @@ public class PlayHandler
         await BroadcastEntityAnimationAsync(entityId, animation);
     }
 
+    /// <summary>
+    /// Handles incoming chat messages from players.
+    /// Broadcasts the message to all players using System Chat Message.
+    /// </summary>
+    /// <param name="connection">The connection that sent the chat message</param>
+    /// <param name="packet">The chat message packet</param>
+    public async Task HandleChatMessageAsync(ClientConnection connection, ChatMessagePacket packet)
+    {
+        var player = connection.Player;
+        if (player == null)
+        {
+            Console.WriteLine($"  │  ⚠ Warning: Received chat message but player is not set");
+            return;
+        }
+
+        var username = connection.Username ?? "Unknown";
+        var message = packet.Message;
+
+        // Validate message (server should reject messages longer than 256 chars, but we'll be defensive)
+        if (string.IsNullOrEmpty(message))
+        {
+            // Empty messages are allowed but won't be broadcast
+            Console.WriteLine($"  │  ← Chat Message from {username}: (empty message, not broadcasting)");
+            return;
+        }
+
+        if (message.Length > 256)
+        {
+            Console.WriteLine($"  │  ⚠ Warning: Chat message from {username} exceeds 256 characters ({message.Length} chars), truncating");
+            message = message.Substring(0, 256);
+        }
+
+        // Log the received message
+        Console.WriteLine($"  │  ← Chat Message from {username}: \"{message}\"");
+
+        // Format message as "<PlayerName> message" using JSON text component
+        // Escape the username and message for JSON
+        var escapedUsername = EscapeJsonString(username);
+        var escapedMessage = EscapeJsonString(message);
+        var chatMessageJson = $"{{\"text\":\"<{escapedUsername}> {escapedMessage}\"}}";
+
+        // Broadcast to all players using System Chat Message
+        // Note: This can be easily swapped to Player Chat Message (0x3F) later if needed
+        await BroadcastSystemChatMessageAsync(chatMessageJson, overlay: false);
+    }
+
+    /// <summary>
+    /// Escapes special characters in a string for JSON.
+    /// Handles quotes, backslashes, and control characters.
+    /// </summary>
+    private string EscapeJsonString(string input)
+    {
+        if (string.IsNullOrEmpty(input))
+            return string.Empty;
+
+        var result = new System.Text.StringBuilder(input.Length);
+        foreach (char c in input)
+        {
+            switch (c)
+            {
+                case '"':
+                    result.Append("\\\"");
+                    break;
+                case '\\':
+                    result.Append("\\\\");
+                    break;
+                case '\b':
+                    result.Append("\\b");
+                    break;
+                case '\f':
+                    result.Append("\\f");
+                    break;
+                case '\n':
+                    result.Append("\\n");
+                    break;
+                case '\r':
+                    result.Append("\\r");
+                    break;
+                case '\t':
+                    result.Append("\\t");
+                    break;
+                default:
+                    // Escape control characters (0x00-0x1F)
+                    if (char.IsControl(c))
+                    {
+                        result.AppendFormat("\\u{0:X4}", (int)c);
+                    }
+                    else
+                    {
+                        result.Append(c);
+                    }
+                    break;
+            }
+        }
+        return result.ToString();
+    }
+
     public async Task HandleSetCreativeModeSlotAsync(ClientConnection connection, SetCreativeModeSlotPacket packet)
     {
         // Log packet details

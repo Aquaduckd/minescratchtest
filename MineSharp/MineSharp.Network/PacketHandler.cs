@@ -126,6 +126,10 @@ public class PacketHandler
             {
                 await _playHandler.HandleSwingArmAsync(connection, swingArmPacket);
             }
+            else if (packetId == 0x08 && packet is ChatMessagePacket chatMessagePacket) // Chat Message
+            {
+                await _playHandler.HandleChatMessageAsync(connection, chatMessagePacket);
+            }
             else
             {
                 // TODO: Handle other PLAY state packets

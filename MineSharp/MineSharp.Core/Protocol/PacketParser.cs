@@ -109,6 +109,10 @@ public class PacketParser
             {
                 return (packetId, ParseSwingArm(reader));
             }
+            else if (packetId == 0x08) // Chat Message
+            {
+                return (packetId, ParseChatMessage(reader));
+            }
         }
         
         // Unknown packet
@@ -769,6 +773,28 @@ public class PacketParser
         return new SwingArmPacket
         {
             Hand = hand
+        };
+    }
+    
+    private static ChatMessagePacket ParseChatMessage(ProtocolReader reader)
+    {
+        var message = reader.ReadString(256);
+        var timestamp = reader.ReadLong();
+        var salt = reader.ReadLong();
+        
+        // Skip signature and other fields for now (can be added later if needed)
+        // Signature: Optional Byte Array (256 bytes) - prefixed with boolean
+        // Message Count: VarInt
+        // Acknowledged: Fixed BitSet (20 bits)
+        // Checksum: Byte
+        
+        Console.WriteLine($"  │  → Parsed ChatMessagePacket (0x08): \"{message}\" (timestamp: {timestamp}, salt: {salt})");
+        
+        return new ChatMessagePacket
+        {
+            Message = message,
+            Timestamp = timestamp,
+            Salt = salt
         };
     }
 }
