@@ -196,6 +196,46 @@ public class PlayHandler
             await _visibilityManager.OnPlayerJoinedAsync(connection, connection.Player);
         }
         
+        // Broadcast equipment to other players when this player joins
+        // Send this player's equipment to all existing players
+        if (connection.Player != null && _world != null)
+        {
+            var inventory = connection.Player.Inventory;
+            var heldItem = inventory.GetHeldItem();
+            var equipment = new List<PacketBuilder.EquipmentEntry>
+            {
+                new PacketBuilder.EquipmentEntry(0, heldItem?.ToSlotData() ?? SlotData.Empty) // Slot 0 = Main hand
+            };
+            
+            await BroadcastEquipmentAsync(connection.Player.EntityId, equipment);
+            
+            // Also send all existing players' equipment to this new player
+            var allPlayers = _world.GetAllPlayers();
+            foreach (var otherPlayer in allPlayers)
+            {
+                if (otherPlayer.EntityId != connection.Player.EntityId)
+                {
+                    var otherInventory = otherPlayer.Inventory;
+                    var otherHeldItem = otherInventory.GetHeldItem();
+                    var otherEquipment = new List<PacketBuilder.EquipmentEntry>
+                    {
+                        new PacketBuilder.EquipmentEntry(0, otherHeldItem?.ToSlotData() ?? SlotData.Empty)
+                    };
+                    
+                    try
+                    {
+                        var packet = PacketBuilder.BuildSetEquipmentPacket(otherPlayer.EntityId, otherEquipment);
+                        await connection.SendPacketAsync(packet);
+                        Console.WriteLine($"  │  → Sent existing player {otherPlayer.EntityId}'s equipment to new player");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"  │  ✗ Error sending existing player equipment: {ex.Message}");
+                    }
+                }
+            }
+        }
+        
         // Now load the rest of the chunks in the view distance using ChunkLoader
         if (connection.ChunkLoader != null && connection.Player != null && _world != null)
         {
@@ -823,7 +863,7 @@ public class PlayHandler
         ChunkDiffManager.Instance.RecordBlockChange(placementX, placementY, placementZ, blockStateId);
         
         // Update the block in BlockManager if world is available
-        if (_world != null)
+        if (_world != null && player != null)
         {
             var block = new Block(blockStateId);
             _world.BlockManager.SetBlock(placementX, placementY, placementZ, block);
@@ -955,6 +995,23 @@ public class PlayHandler
             
             // Send cursor item update (slot -1)
             await SendContainerSlotAsync(connection, packet.WindowId, inventory.InventoryStateId, -1, cursorSlotData);
+            
+            // Check if the currently selected hotbar slot (held item) was modified
+            int heldSlotIndex = inventory.SelectedHotbarSlotIndex;
+            bool heldSlotModified = packet.Slots.Any(slot => slot.Item1 == heldSlotIndex);
+            
+            if (heldSlotModified)
+            {
+                // The held item changed, broadcast equipment update to other players
+                var heldItem = inventory.GetHeldItem();
+                var equipment = new List<PacketBuilder.EquipmentEntry>
+                {
+                    new PacketBuilder.EquipmentEntry(0, heldItem?.ToSlotData() ?? SlotData.Empty) // Slot 0 = Main hand
+                };
+                
+                await BroadcastEquipmentAsync(player.EntityId, equipment);
+                Console.WriteLine($"  │  → Held slot ({heldSlotIndex}) was modified, broadcasting equipment update");
+            }
         }
     }
     
@@ -1276,6 +1333,35 @@ public class PlayHandler
         {
             Console.WriteLine($"  │  ✓ Hotbar slot changed to {packet.Slot} (empty)");
         }
+        
+        // Broadcast the held item change to other players
+        var equipment = new List<PacketBuilder.EquipmentEntry>
+        {
+            new PacketBuilder.EquipmentEntry(0, heldItem?.ToSlotData() ?? SlotData.Empty) // Slot 0 = Main hand
+        };
+        
+        await BroadcastEquipmentAsync(player.EntityId, equipment);
+    }
+
+    public async Task HandleSwingArmAsync(ClientConnection connection, SwingArmPacket packet)
+    {
+        var player = connection.Player;
+        if (player == null)
+        {
+            Console.WriteLine($"  │  ⚠ Warning: Received swing arm but player is not set");
+            return;
+        }
+
+        int entityId = player.EntityId;
+        
+        // Convert hand to animation ID: 0 = Main hand (animation 0), 1 = Off hand (animation 3)
+        byte animation = (byte)(packet.Hand == 0 ? 0 : 3);
+        
+        string handName = packet.Hand == 0 ? "Main Hand" : "Off Hand";
+        Console.WriteLine($"  │  ← Swing Arm: {handName}");
+        
+        // Broadcast the animation to all other players
+        await BroadcastEntityAnimationAsync(entityId, animation);
     }
 
     public async Task HandleSetCreativeModeSlotAsync(ClientConnection connection, SetCreativeModeSlotPacket packet)
@@ -1384,6 +1470,21 @@ public class PlayHandler
         // Send slot update to client
         var slotData = itemStack.ToSlotData();
         await SendContainerSlotAsync(connection, 0, inventory.InventoryStateId, (short)packet.Slot, slotData);
+        
+        // Check if the currently selected hotbar slot (held item) was modified
+        int heldSlotIndex = inventory.SelectedHotbarSlotIndex;
+        if (packet.Slot == heldSlotIndex)
+        {
+            // The held item changed, broadcast equipment update to other players
+            var heldItem = inventory.GetHeldItem();
+            var equipment = new List<PacketBuilder.EquipmentEntry>
+            {
+                new PacketBuilder.EquipmentEntry(0, heldItem?.ToSlotData() ?? SlotData.Empty) // Slot 0 = Main hand
+            };
+            
+            await BroadcastEquipmentAsync(player.EntityId, equipment);
+            Console.WriteLine($"  │  → Held slot ({heldSlotIndex}) was modified via creative menu, broadcasting equipment update");
+        }
     }
 
     public async Task SendChunkDataAsync(ClientConnection connection, int chunkX, int chunkZ, byte[] chunkData, bool fullChunk)
@@ -1546,6 +1647,107 @@ public class PlayHandler
         else
         {
             Console.WriteLine($"  │  ⚠ No players with chunk ({chunkX}, {chunkZ}) loaded to receive world event");
+        }
+    }
+
+    /// <summary>
+    /// Broadcasts an entity animation (e.g., arm swing) to all players who can see the entity.
+    /// For now, broadcasts to all connected players (can be optimized later to only send to players within view distance).
+    /// </summary>
+    private async Task BroadcastEntityAnimationAsync(int entityId, byte animation)
+    {
+        if (_getAllConnections == null)
+            return;
+
+        // Get all connections
+        var allConnections = _getAllConnections().ToList();
+        int broadcastCount = 0;
+
+        string animationName = animation switch
+        {
+            0 => "Swing main arm",
+            2 => "Leave bed",
+            3 => "Swing offhand",
+            4 => "Critical effect",
+            5 => "Magic critical effect",
+            _ => $"Unknown ({animation})"
+        };
+
+        Console.WriteLine($"  │  → Sending Entity Animation (0x02): Entity {entityId}, Animation {animation} ({animationName})");
+
+        foreach (var connection in allConnections)
+        {
+            // Skip sending to the player performing the animation (they already see their own animation)
+            if (connection.Player != null && connection.Player.EntityId == entityId)
+                continue;
+
+            // Send to all other players (can be optimized later to check visibility/distance)
+            try
+            {
+                var packet = PacketBuilder.BuildEntityAnimationPacket(entityId, animation);
+                await connection.SendPacketAsync(packet);
+                broadcastCount++;
+                Console.WriteLine($"  │    → Sent to player {connection.PlayerUuid} (Entity {connection.Player?.EntityId})");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"  │  ✗ Error broadcasting entity animation to player {connection.PlayerUuid}: {ex.Message}");
+            }
+        }
+
+        if (broadcastCount > 0)
+        {
+            Console.WriteLine($"  │  ✓ Broadcast entity animation ({animationName}) to {broadcastCount} player(s)");
+        }
+        else
+        {
+            Console.WriteLine($"  │  ⚠ No other players to receive entity animation");
+        }
+    }
+
+    /// <summary>
+    /// Broadcasts equipment (held items) to all players who can see the entity.
+    /// For now, broadcasts to all connected players (can be optimized later to only send to players within view distance).
+    /// </summary>
+    private async Task BroadcastEquipmentAsync(int entityId, List<PacketBuilder.EquipmentEntry> equipment)
+    {
+        if (_getAllConnections == null)
+            return;
+
+        // Get all connections
+        var allConnections = _getAllConnections().ToList();
+        int broadcastCount = 0;
+
+        string equipmentDesc = string.Join(", ", equipment.Select(e => $"slot {e.Slot} (item {e.Item.ItemId})"));
+        Console.WriteLine($"  │  → Sending Set Equipment (0x64): Entity {entityId}, Equipment: {equipmentDesc}");
+
+        foreach (var connection in allConnections)
+        {
+            // Skip sending to the player whose equipment is being updated (they already see their own equipment)
+            if (connection.Player != null && connection.Player.EntityId == entityId)
+                continue;
+
+            // Send to all other players (can be optimized later to check visibility/distance)
+            try
+            {
+                var packet = PacketBuilder.BuildSetEquipmentPacket(entityId, equipment);
+                await connection.SendPacketAsync(packet);
+                broadcastCount++;
+                Console.WriteLine($"  │    → Sent to player {connection.PlayerUuid} (Entity {connection.Player?.EntityId})");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"  │  ✗ Error broadcasting equipment to player {connection.PlayerUuid}: {ex.Message}");
+            }
+        }
+
+        if (broadcastCount > 0)
+        {
+            Console.WriteLine($"  │  ✓ Broadcast equipment to {broadcastCount} player(s)");
+        }
+        else
+        {
+            Console.WriteLine($"  │  ⚠ No other players to receive equipment update");
         }
     }
 

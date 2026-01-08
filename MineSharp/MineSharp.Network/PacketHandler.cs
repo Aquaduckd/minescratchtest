@@ -122,6 +122,10 @@ public class PacketHandler
             {
                 await _playHandler.HandleSetCreativeModeSlotAsync(connection, creativeSlotPacket);
             }
+            else if (packetId == 0x3C && packet is SwingArmPacket swingArmPacket) // Swing Arm
+            {
+                await _playHandler.HandleSwingArmAsync(connection, swingArmPacket);
+            }
             else
             {
                 // TODO: Handle other PLAY state packets

@@ -105,6 +105,10 @@ public class PacketParser
                 var packet = ParseSetCreativeModeSlot(reader);
                 return (packetId, packet);
             }
+            else if (packetId == 0x3C) // Swing Arm
+            {
+                return (packetId, ParseSwingArm(reader));
+            }
         }
         
         // Unknown packet
@@ -489,7 +493,7 @@ public class PacketParser
         }
     }
     
-    private static SlotData ParseSlotData(ProtocolReader reader)
+    public static SlotData ParseSlotData(ProtocolReader reader)
     {
         // Modern Slot Data structure (1.20.5+):
         // 1. VarInt: Item Count (if 0, slot is empty, no further fields)
@@ -752,6 +756,19 @@ public class PacketParser
         {
             Slot = slot,
             SlotData = slotData
+        };
+    }
+    
+    private static SwingArmPacket ParseSwingArm(ProtocolReader reader)
+    {
+        var hand = reader.ReadVarInt();
+        
+        string handName = hand == 0 ? "Main Hand" : "Off Hand";
+        Console.WriteLine($"  │  → Parsed SwingArmPacket (0x3C): {handName}");
+        
+        return new SwingArmPacket
+        {
+            Hand = hand
         };
     }
 }

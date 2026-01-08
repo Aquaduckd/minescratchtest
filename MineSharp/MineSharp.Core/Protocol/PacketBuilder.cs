@@ -1164,4 +1164,116 @@ public class PacketBuilder
         
         return finalWriter.ToArray();
     }
+
+    /// <summary>
+    /// Builds an Entity Animation packet (0x02, clientbound).
+    /// Used to trigger entity animations like arm swings.
+    /// </summary>
+    /// <param name="entityId">The ID of the entity performing the animation</param>
+    /// <param name="animation">Animation ID: 0 = Swing main arm, 3 = Swing offhand, 2 = Leave bed, 4 = Critical effect, 5 = Magic critical effect</param>
+    public static byte[] BuildEntityAnimationPacket(int entityId, byte animation)
+    {
+        // Entity Animation packet structure (0x02):
+        // 1. Entity ID (VarInt)
+        // 2. Animation (Unsigned Byte)
+        
+        var packetWriter = new ProtocolWriter();
+        packetWriter.WriteVarInt(0x02); // Packet ID
+        
+        // Write entity ID
+        packetWriter.WriteVarInt(entityId);
+        
+        // Write animation ID
+        packetWriter.WriteByte(animation);
+        
+        // Build final packet with length prefix
+        var packetData = packetWriter.ToArray();
+        var finalWriter = new ProtocolWriter();
+        finalWriter.WriteVarInt(packetData.Length);
+        finalWriter.WriteBytes(packetData);
+        
+        return finalWriter.ToArray();
+    }
+
+    /// <summary>
+    /// Represents a single equipment entry for the Set Equipment packet.
+    /// </summary>
+    public class EquipmentEntry
+    {
+        /// <summary>
+        /// Equipment slot ID: 0 = Main hand, 1 = Off hand, 2-7 = Armor slots
+        /// </summary>
+        public byte Slot { get; set; }
+        
+        /// <summary>
+        /// The item in this slot (can be empty).
+        /// </summary>
+        public SlotData Item { get; set; }
+        
+        public EquipmentEntry(byte slot, SlotData item)
+        {
+            Slot = slot;
+            Item = item;
+        }
+    }
+
+    /// <summary>
+    /// Builds a Set Equipment packet (0x64, clientbound).
+    /// Used to update what items an entity is holding/wearing.
+    /// </summary>
+    /// <param name="entityId">The ID of the entity</param>
+    /// <param name="equipment">List of equipment entries (slot + item)</param>
+    public static byte[] BuildSetEquipmentPacket(int entityId, List<EquipmentEntry> equipment)
+    {
+        // Set Equipment packet structure (0x64):
+        // 1. Entity ID (VarInt)
+        // 2. Equipment Array:
+        //    - For each entry:
+        //      - Slot (Byte) - with bit 7 (0x80) set if more entries follow
+        //      - Item (Slot Data)
+        
+        var packetWriter = new ProtocolWriter();
+        packetWriter.WriteVarInt(0x64); // Packet ID
+        
+        // Write entity ID
+        packetWriter.WriteVarInt(entityId);
+        
+        // Write equipment array
+        if (equipment == null || equipment.Count == 0)
+        {
+            // No equipment entries - write a single entry with continuation bit clear
+            // This represents an empty equipment update (though typically you'd send at least one slot)
+            // For safety, we'll send an empty main hand slot
+            byte slot = 0; // Main hand, no continuation bit
+            packetWriter.WriteByte(slot);
+            WriteSlotData(packetWriter, SlotData.Empty);
+        }
+        else
+        {
+            // Write each equipment entry
+            for (int i = 0; i < equipment.Count; i++)
+            {
+                var entry = equipment[i];
+                bool hasMore = i < equipment.Count - 1;
+                
+                // Set continuation bit (bit 7) if more entries follow
+                byte slot = entry.Slot;
+                if (hasMore)
+                {
+                    slot |= 0x80; // Set bit 7
+                }
+                
+                packetWriter.WriteByte(slot);
+                WriteSlotData(packetWriter, entry.Item);
+            }
+        }
+        
+        // Build final packet with length prefix
+        var packetData = packetWriter.ToArray();
+        var finalWriter = new ProtocolWriter();
+        finalWriter.WriteVarInt(packetData.Length);
+        finalWriter.WriteBytes(packetData);
+        
+        return finalWriter.ToArray();
+    }
 }
