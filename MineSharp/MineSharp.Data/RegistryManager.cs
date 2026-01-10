@@ -16,8 +16,10 @@ public class RegistryManager
     
     // Block breaking data
     private Dictionary<string, double>? _blockHardness; // block name -> hardness (-1 for unbreakable)
-    private Dictionary<string, Dictionary<string, double>>? _toolSpeeds; // material -> tool_type -> speed
+    private Dictionary<string, Dictionary<string, double>>? _toolSpeeds; // material -> tool_type -> speed (simplified)
+    private Dictionary<string, Dictionary<string, JsonElement>>? _toolSpeedsFull; // tool name -> block tag/name -> speed data (full)
     private Dictionary<string, List<string>>? _mineableTags; // tool tag -> list of block names
+    private Dictionary<string, List<string>>? _blockTags; // tag name -> list of block names (e.g., "wool" -> ["minecraft:white_wool", ...])
     private Dictionary<int, string>? _blockStateIdToName; // block state ID -> block name
 
     public void LoadRegistries(string dataPath)
@@ -31,7 +33,9 @@ public class RegistryManager
         // Block breaking data files
         var blockHardnessFile = Path.Combine(dataPath, "block_hardness.json");
         var toolSpeedsFile = Path.Combine(dataPath, "tool_speeds_simplified.json");
+        var toolSpeedsFullFile = Path.Combine(dataPath, "tool_speeds.json");
         var mineableTagsFile = Path.Combine(dataPath, "mineable_tags.json");
+        var blockTagsFile = Path.Combine(dataPath, "block_tags.json");
 
         // Load registries.json (has protocol_id for each entry)
         if (File.Exists(registriesFile))
@@ -170,6 +174,32 @@ public class RegistryManager
             try
             {
                 _mineableTags = DataLoader.LoadJson<Dictionary<string, List<string>>>(mineableTagsFile);
+            }
+            catch (Exception)
+            {
+                // If parsing fails, leave map null; callers must handle missing mapping
+            }
+        }
+        
+        // Load tool_speeds.json (full version with block-specific speeds)
+        if (File.Exists(toolSpeedsFullFile))
+        {
+            try
+            {
+                _toolSpeedsFull = DataLoader.LoadJson<Dictionary<string, Dictionary<string, JsonElement>>>(toolSpeedsFullFile);
+            }
+            catch (Exception)
+            {
+                // If parsing fails, leave map null; callers must handle missing mapping
+            }
+        }
+        
+        // Load block_tags.json
+        if (File.Exists(blockTagsFile))
+        {
+            try
+            {
+                _blockTags = DataLoader.LoadJson<Dictionary<string, List<string>>>(blockTagsFile);
             }
             catch (Exception)
             {
@@ -385,10 +415,48 @@ public class RegistryManager
     /// </summary>
     public double? GetBlockHardness(string blockName)
     {
+        // Normalize block name to include "minecraft:" prefix if missing
+        string normalizedBlockName = blockName.StartsWith("minecraft:") ? blockName : $"minecraft:{blockName}";
+        
+        // First, try direct lookup (handles specific blocks like "minecraft:stone", generic blocks like "minecraft:wool", etc.)
         if (_blockHardness != null && _blockHardness.TryGetValue(blockName, out var hardness))
         {
             return hardness;
         }
+        
+        // Try normalized name as well
+        if (_blockHardness != null && _blockHardness.TryGetValue(normalizedBlockName, out hardness))
+        {
+            return hardness;
+        }
+        
+        // If not found, check if the block is in any tags, and try to look up a generic block name for that tag
+        // For example: "minecraft:lime_wool" is in the "wool" tag, so try looking up "minecraft:wool"
+        if (_blockTags != null && _blockHardness != null)
+        {
+            foreach (var tagKvp in _blockTags)
+            {
+                string tagName = tagKvp.Key; // e.g., "wool"
+                var tagBlocks = tagKvp.Value; // e.g., ["minecraft:white_wool", "minecraft:orange_wool", ...]
+                
+                // Check if the block is in this tag
+                if (tagBlocks.Contains(blockName) || tagBlocks.Contains(normalizedBlockName))
+                {
+                    // Try to look up a generic block name for this tag
+                    // For tag "wool", try "minecraft:wool"
+                    // For tag "leaves", try "minecraft:leaves" (or other generic names)
+                    string genericBlockName = normalizedBlockName.StartsWith("minecraft:") 
+                        ? $"minecraft:{tagName}" 
+                        : tagName;
+                    
+                    if (_blockHardness.TryGetValue(genericBlockName, out hardness))
+                    {
+                        return hardness;
+                    }
+                }
+            }
+        }
+        
         return null;
     }
 
@@ -422,9 +490,127 @@ public class RegistryManager
     }
 
     /// <summary>
+    /// Gets the tool speed from an item name for a specific block.
+    /// First checks block-specific speeds (e.g., shears on wool), then falls back to general speeds.
+    /// </summary>
+    /// <param name="itemName">Item identifier (e.g., "minecraft:iron_pickaxe")</param>
+    /// <param name="blockName">Block identifier (e.g., "minecraft:wool")</param>
+    /// <returns>Speed multiplier (defaults to 1.0 for hand)</returns>
+    public double GetToolSpeedForBlock(string itemName, string blockName)
+    {
+        if (string.IsNullOrEmpty(itemName))
+        {
+            return 1.0; // Hand speed
+        }
+
+        // Normalize item name to include "minecraft:" prefix
+        string normalizedItemName = itemName.StartsWith("minecraft:") ? itemName : $"minecraft:{itemName}";
+        
+        // Normalize block name to include "minecraft:" prefix (for consistent comparison)
+        string normalizedBlockName = blockName.StartsWith("minecraft:") ? blockName : $"minecraft:{blockName}";
+        
+        // First, check for block-specific speeds in tool_speeds.json (full version)
+        if (_toolSpeedsFull != null && _toolSpeedsFull.TryGetValue(normalizedItemName, out var blockSpeeds))
+        {
+            // Check direct block name match (e.g., "minecraft:cobweb")
+            // Try both original and normalized block name
+            if (blockSpeeds.TryGetValue(blockName, out var directSpeedData))
+            {
+                if (directSpeedData.TryGetProperty("speed", out var speedElement))
+                {
+                    return speedElement.GetDouble();
+                }
+            }
+            
+            if (blockSpeeds.TryGetValue(normalizedBlockName, out var normalizedSpeedData))
+            {
+                if (normalizedSpeedData.TryGetProperty("speed", out var speedElement))
+                {
+                    return speedElement.GetDouble();
+                }
+            }
+            
+            // Check comma-separated block names (e.g., "minecraft:vine,minecraft:glow_lichen")
+            foreach (var kvp in blockSpeeds)
+            {
+                var blockKey = kvp.Key;
+                if (blockKey.Contains(',') && !blockKey.StartsWith("#"))
+                {
+                    // This is a comma-separated list of blocks
+                    var blockList = blockKey.Split(',');
+                    foreach (var block in blockList)
+                    {
+                        var trimmedBlock = block.Trim();
+                        if (trimmedBlock == blockName || trimmedBlock == normalizedBlockName)
+                        {
+                            if (kvp.Value.TryGetProperty("speed", out var speedElement))
+                            {
+                                return speedElement.GetDouble();
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Check block tags (e.g., "#minecraft:wool")
+            if (_blockTags != null)
+            {
+                foreach (var kvp in blockSpeeds)
+                {
+                    var blockKey = kvp.Key;
+                    if (blockKey.StartsWith("#"))
+                    {
+                        // This is a tag reference (e.g., "#minecraft:wool" or "#minecraft:leaves")
+                        var tagName = blockKey.Substring(1); // Remove the "#"
+                        // Remove "minecraft:" prefix if present for tag lookup
+                        var tagLookupName = tagName.StartsWith("minecraft:") ? tagName.Substring(10) : tagName;
+                        
+                        // Check if block is in this tag
+                        if (_blockTags.TryGetValue(tagLookupName, out var tagBlocks))
+                        {
+                            // Check if block name is directly in the tag
+                            if (tagBlocks.Contains(blockName) || tagBlocks.Contains(normalizedBlockName))
+                            {
+                                if (kvp.Value.TryGetProperty("speed", out var speedElement))
+                                {
+                                    return speedElement.GetDouble();
+                                }
+                            }
+                            
+                            // Handle generic block names (e.g., "minecraft:wool" should match wool tag)
+                            // If the tag is "wool" and the block name is "minecraft:wool", treat it as matching
+                            // OR if the block name ends with the tag name (e.g., "white_wool" ends with "wool")
+                            if (tagLookupName == "wool" && (blockName == "minecraft:wool" || normalizedBlockName == "minecraft:wool"))
+                            {
+                                // Generic wool block matches the wool tag
+                                if (kvp.Value.TryGetProperty("speed", out var speedElement))
+                                {
+                                    return speedElement.GetDouble();
+                                }
+                            }
+                            else if (blockName.EndsWith($"_{tagLookupName}") || normalizedBlockName.EndsWith($"_{tagLookupName}"))
+                            {
+                                // Block name ends with tag name (e.g., "white_wool" ends with "_wool")
+                                if (kvp.Value.TryGetProperty("speed", out var speedElement))
+                                {
+                                    return speedElement.GetDouble();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Fall back to general tool speed lookup (for standard tools like pickaxes, axes, etc.)
+        return GetToolSpeedFromItemName(itemName);
+    }
+
+    /// <summary>
     /// Gets the tool speed from an item name (e.g., "minecraft:iron_pickaxe" -> 6.0).
     /// Parses the item name to extract material and tool type.
     /// Returns 1.0 for hand/no tool if item name doesn't match a tool pattern.
+    /// This is the general speed, not block-specific. Use GetToolSpeedForBlock for block-specific speeds.
     /// </summary>
     /// <param name="itemName">Item identifier (e.g., "minecraft:iron_pickaxe")</param>
     /// <returns>Speed multiplier (defaults to 1.0 for hand)</returns>
@@ -452,10 +638,11 @@ public class RegistryManager
             }
         }
         
-        // Special case: shears
+        // Special case: shears (general fallback - should use GetToolSpeedForBlock for block-specific)
         if (name == "shears" || itemName == "minecraft:shears")
         {
             // Shears have varying speeds, but default to 2.0 for general use
+            // This should rarely be used - prefer GetToolSpeedForBlock with a block name
             return 2.0;
         }
         
@@ -466,13 +653,101 @@ public class RegistryManager
     /// <summary>
     /// Checks if a tool can mine a specific block based on mineable tags.
     /// Returns true if the tool is in the mineable tags for that block.
+    /// Special handling for shears (wool, leaves, cobweb, vine, glow_lichen).
     /// </summary>
     /// <param name="toolName">Tool identifier (e.g., "minecraft:iron_pickaxe")</param>
     /// <param name="blockName">Block identifier (e.g., "minecraft:stone")</param>
     /// <returns>True if the tool can mine the block, false otherwise</returns>
     public bool CanToolMineBlock(string toolName, string blockName)
     {
-        if (_mineableTags == null || string.IsNullOrEmpty(toolName) || string.IsNullOrEmpty(blockName))
+        if (string.IsNullOrEmpty(toolName) || string.IsNullOrEmpty(blockName))
+        {
+            return false;
+        }
+
+        // Normalize block name
+        string normalizedBlockName = blockName.StartsWith("minecraft:") ? blockName : $"minecraft:{blockName}";
+        string blockNameWithoutPrefix = normalizedBlockName.Substring(10); // Remove "minecraft:" prefix
+
+        // Special handling for shears
+        if (toolName.Contains("shears") || toolName == "minecraft:shears")
+        {
+            // Shears can mine wool, leaves, cobweb, vine, and glow_lichen
+            // Check if block is in wool tag
+            if (_blockTags != null && _blockTags.TryGetValue("wool", out var woolBlocks))
+            {
+                if (woolBlocks.Contains(normalizedBlockName) || woolBlocks.Contains(blockName))
+                {
+                    return true;
+                }
+            }
+            
+            // Check if block is in leaves tag
+            if (_blockTags != null && _blockTags.TryGetValue("leaves", out var leavesBlocks))
+            {
+                if (leavesBlocks.Contains(normalizedBlockName) || leavesBlocks.Contains(blockName))
+                {
+                    return true;
+                }
+            }
+            
+            // Check direct block names
+            if (normalizedBlockName == "minecraft:cobweb" || blockName == "minecraft:cobweb" ||
+                normalizedBlockName == "minecraft:vine" || blockName == "minecraft:vine" ||
+                normalizedBlockName == "minecraft:glow_lichen" || blockName == "minecraft:glow_lichen")
+            {
+                return true;
+            }
+            
+            // Also check if there's a block-specific speed for shears on this block
+            // (this handles edge cases and confirms effectiveness)
+            if (_toolSpeedsFull != null)
+            {
+                if (_toolSpeedsFull.TryGetValue("minecraft:shears", out var shearsSpeeds))
+                {
+                    // Check direct match
+                    if (shearsSpeeds.ContainsKey(normalizedBlockName) || shearsSpeeds.ContainsKey(blockName))
+                    {
+                        return true;
+                    }
+                    
+                    // Check tags
+                    foreach (var kvp in shearsSpeeds)
+                    {
+                        if (kvp.Key.StartsWith("#"))
+                        {
+                            var tagName = kvp.Key.Substring(1);
+                            var tagLookupName = tagName.StartsWith("minecraft:") ? tagName.Substring(10) : tagName;
+                            if (_blockTags != null && _blockTags.TryGetValue(tagLookupName, out var tagBlocks))
+                            {
+                                if (tagBlocks.Contains(normalizedBlockName) || tagBlocks.Contains(blockName))
+                                {
+                                    return true;
+                                }
+                            }
+                        }
+                        else if (kvp.Key.Contains(','))
+                        {
+                            // Comma-separated block names
+                            var blockList = kvp.Key.Split(',');
+                            foreach (var block in blockList)
+                            {
+                                var trimmedBlock = block.Trim();
+                                if (trimmedBlock == normalizedBlockName || trimmedBlock == blockName)
+                                {
+                                    return true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            return false; // Shears can't mine this block
+        }
+
+        // For other tools, check mineable tags
+        if (_mineableTags == null)
         {
             return false;
         }
@@ -505,7 +780,7 @@ public class RegistryManager
         // Check if block is in the mineable tag for this tool type
         if (_mineableTags.TryGetValue(toolType, out var mineableBlocks))
         {
-            return mineableBlocks.Contains(blockName);
+            return mineableBlocks.Contains(normalizedBlockName) || mineableBlocks.Contains(blockName);
         }
 
         return false;

@@ -92,6 +92,9 @@ public class PlayHandler
                 
                 player = new MineSharp.Game.Player(connection.PlayerUuid.Value, entityId, viewDistance: 10);
                 
+                // TEMPORARY: Populate inventory with tools for testing
+                PopulateTestTools(player);
+                
                 // Add player to world if available
                 if (_world != null)
                 {
@@ -140,11 +143,18 @@ public class PlayHandler
         // Send Login (play) packet
         await SendLoginPlayPacketAsync(connection);
         
-        // If player reconnected, send their inventory to the client
-        // The client needs to know about the inventory state
-        if (isReconnection && connection.Player != null)
+        // Send inventory to client (both new players and reconnections)
+        // New players need to see the tools we added, reconnections need their preserved inventory
+        if (connection.Player != null)
         {
-            Console.WriteLine($"  │  → Sending inventory to reconnected player...");
+            if (isReconnection)
+            {
+                Console.WriteLine($"  │  → Sending inventory to reconnected player...");
+            }
+            else
+            {
+                Console.WriteLine($"  │  → Sending inventory with test tools to new player...");
+            }
             await SendContainerContentAsync(connection, connection.Player.Inventory);
         }
         
@@ -1861,10 +1871,36 @@ public class PlayHandler
         // Get block hardness
         double hardness = _registryManager.GetBlockHardness(blockName) ?? 1.5;
         
-        // For MVP, assume player is using hand (tool speed = 1.0)
-        // TODO: Track actual held item from inventory
-        string toolName = "hand";
-        double toolSpeed = 1.0;
+        // Get the tool from the player's main hand
+        string toolName = "hand"; // Default to hand
+        
+        var heldItem = player.Inventory.GetHeldItem();
+        if (heldItem != null && !heldItem.IsEmpty && _registryManager != null)
+        {
+            // Convert item protocol ID to item name (e.g., "minecraft:iron_pickaxe")
+            string? itemName = _registryManager.GetItemNameByProtocolId(heldItem.ItemId);
+            if (!string.IsNullOrEmpty(itemName))
+            {
+                toolName = itemName;
+            }
+        }
+        
+        // Get block-specific tool speed (this handles shears on wool, etc.)
+        if (_registryManager == null)
+        {
+            Console.WriteLine($"  │  ⚠ Warning: Cannot calculate break time - registry manager not available");
+            return;
+        }
+        
+        double toolSpeed = _registryManager.GetToolSpeedForBlock(toolName, blockName);
+        if (toolName != "hand")
+        {
+            Console.WriteLine($"  │    → Player is using {toolName} (block-specific speed: {toolSpeed} for {blockName})");
+        }
+        else
+        {
+            Console.WriteLine($"  │    → Player is using hand (no tool in main hand)");
+        }
 
         // Calculate break time
         int breakTicks = BlockBreakingCalculator.CalculateBreakTicks(blockName, toolName, _registryManager);
@@ -2103,6 +2139,65 @@ public class PlayHandler
             Console.WriteLine($"  │  ✗ Error in breaking animation scheduler: {ex.Message}");
             Console.WriteLine($"  │    Stack trace: {ex.StackTrace}");
         }
+    }
+
+    /// <summary>
+    /// TEMPORARY: Populates the player's inventory with test tools for debugging.
+    /// Adds various pickaxes, axes, shovels, and hoes to the hotbar.
+    /// </summary>
+    private void PopulateTestTools(Player player)
+    {
+        if (_registryManager == null)
+        {
+            Console.WriteLine($"  │  ⚠ Warning: Cannot populate test tools - registry manager not available");
+            return;
+        }
+
+        Console.WriteLine($"  │  → Populating inventory with test tools...");
+        
+        // List of tools to add (various materials and types)
+        string[] toolNames = new[]
+        {
+            "minecraft:shears",
+            "minecraft:wooden_pickaxe",
+            "minecraft:stone_pickaxe",
+            "minecraft:iron_pickaxe",
+            "minecraft:golden_pickaxe",
+            "minecraft:diamond_pickaxe",
+            "minecraft:wooden_axe",
+            "minecraft:iron_axe",
+            "minecraft:diamond_axe",
+            "minecraft:wooden_shovel",
+            "minecraft:iron_shovel"
+        };
+
+        int slotIndex = Inventory.HOTBAR_START_SLOT; // Start at first hotbar slot (36)
+        int addedCount = 0;
+
+        foreach (string toolName in toolNames)
+        {
+            // Get protocol ID for this item
+            int? protocolId = _registryManager.GetRegistryEntryProtocolId("minecraft:item", toolName);
+            if (protocolId.HasValue)
+            {
+                player.Inventory.SetSlot(slotIndex, protocolId.Value, 1);
+                Console.WriteLine($"  │    → Added {toolName} (protocol ID: {protocolId.Value}) to slot {slotIndex}");
+                slotIndex++;
+                addedCount++;
+                
+                // Stop if we've filled all hotbar slots (9 slots: 36-44)
+                if (slotIndex > Inventory.HOTBAR_END_SLOT)
+                {
+                    break;
+                }
+            }
+            else
+            {
+                Console.WriteLine($"  │    ⚠ Warning: Could not find protocol ID for {toolName}");
+            }
+        }
+
+        Console.WriteLine($"  │  ✓ Added {addedCount} tool(s) to inventory");
     }
 
     /// <summary>

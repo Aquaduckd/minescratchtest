@@ -36,8 +36,9 @@ public static class BlockBreakingCalculator
             return 20; // Default to 1 second for unknown blocks
         }
 
-        // Get tool speed (defaults to 1.0 for hand)
-        double toolSpeed = registryManager.GetToolSpeedFromItemName(toolName);
+        // Get tool speed for this specific block (defaults to 1.0 for hand)
+        // This handles block-specific speeds (e.g., shears on wool = 5.0)
+        double toolSpeed = registryManager.GetToolSpeedForBlock(toolName, blockName);
 
         // Check if tool can harvest the block
         bool canHarvest = registryManager.CanToolMineBlock(toolName, blockName);
@@ -81,15 +82,17 @@ public static class BlockBreakingCalculator
     }
 
     /// <summary>
-    /// Gets the tool speed multiplier for a given tool.
+    /// Gets the tool speed multiplier for a given tool and block.
     /// Returns 1.0 for hand/no tool.
+    /// Uses block-specific speeds when available (e.g., shears on wool).
     /// </summary>
     /// <param name="toolName">Tool identifier (e.g., "minecraft:iron_pickaxe")</param>
+    /// <param name="blockName">Block identifier (e.g., "minecraft:wool")</param>
     /// <param name="registryManager">Registry manager for accessing tool speeds</param>
     /// <returns>Speed multiplier</returns>
-    public static double GetToolSpeed(string toolName, RegistryManager registryManager)
+    public static double GetToolSpeed(string toolName, string blockName, RegistryManager registryManager)
     {
-        return registryManager.GetToolSpeedFromItemName(toolName);
+        return registryManager.GetToolSpeedForBlock(toolName, blockName);
     }
 }
 
