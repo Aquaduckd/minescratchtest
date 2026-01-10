@@ -3,3 +3,6 @@
 # Terrain generation
 noise>=1.2.2
 
+# Data extraction (optional - improves HTML table parsing)
+beautifulsoup4>=4.9.0
+

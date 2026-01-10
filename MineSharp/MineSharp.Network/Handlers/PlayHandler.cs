@@ -10,6 +10,8 @@ using MineSharp.World.ChunkDiffs;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace MineSharp.Network.Handlers;
 
@@ -22,12 +24,14 @@ public class PlayHandler
     private readonly PlayerVisibilityManager? _visibilityManager;
     private readonly RegistryManager? _registryManager;
     private readonly Func<IEnumerable<ClientConnection>>? _getAllConnections;
+    private readonly BlockBreakingSessionManager _breakingSessionManager;
 
     public PlayHandler(MineSharp.World.World? world = null, Func<IEnumerable<ClientConnection>>? getAllConnections = null, RegistryManager? registryManager = null)
     {
         _world = world;
         _registryManager = registryManager;
         _getAllConnections = getAllConnections;
+        _breakingSessionManager = new BlockBreakingSessionManager();
         
         // Create PlayerVisibilityManager if world and connection getter are available
         if (_world != null && getAllConnections != null)
@@ -383,7 +387,7 @@ public class PlayHandler
                 entityId = connection.Player.EntityId;
             }
             
-            byte gameMode = 1; // Creative (0=Survival, 1=Creative, 2=Adventure, 3=Spectator)
+            byte gameMode = 0; // Survival (0=Survival, 1=Creative, 2=Adventure, 3=Spectator)
             var loginPlay = PacketBuilder.BuildLoginPlayPacket(
                 entityId: entityId,
                 dimensionNames: new List<string> { "minecraft:overworld" },
@@ -819,7 +823,8 @@ public class PlayHandler
                     _world.BlockManager.SetBlock(blockX, blockY, blockZ, Block.Air());
                     
                     // Clear the destroy stage animation (stage 10+ removes it)
-                    await BroadcastBlockDestroyStageAsync(blockX, blockY, blockZ, entityId, 10);
+                    // Exclude the breaking player - client handles their own animation
+                    await BroadcastBlockDestroyStageAsync(blockX, blockY, blockZ, entityId, 10, player.Uuid);
                     
                     // Broadcast block change to all players with this chunk loaded
                     await BroadcastBlockChangeAsync(blockX, blockY, blockZ, 0);
@@ -833,50 +838,19 @@ public class PlayHandler
             }
             else
             {
-                // Survival mode: Show animation start (stage 0)
-                Console.WriteLine($"  │  → Survival mode: Starting block break animation...");
-                await BroadcastBlockDestroyStageAsync(blockX, blockY, blockZ, entityId, 0);
+                // Survival mode: Start breaking session with animation
+                await HandleStartBreakingAsync(connection, player, blockX, blockY, blockZ, entityId);
             }
         }
         else if (packet.Status == 1) // Cancelled digging
         {
-            // Clear the destroy stage animation
-            Console.WriteLine($"  │  → Cancelled digging: Clearing animation...");
-            await BroadcastBlockDestroyStageAsync(blockX, blockY, blockZ, entityId, 10);
+            // Cancel the breaking session
+            await HandleCancelBreakingAsync(player.Uuid, blockX, blockY, blockZ, entityId);
         }
         else if (packet.Status == 2) // Finished digging
         {
-            // Survival mode: Block is broken
-            Console.WriteLine($"  │  → Survival mode: Block broken! Recording change...");
-            
-            // Get the original block state ID before breaking (for world event sound)
-            int originalBlockStateId = 0;
-            if (_world != null)
-            {
-                var originalBlock = _world.BlockManager.GetBlock(blockX, blockY, blockZ);
-                originalBlockStateId = originalBlock?.BlockStateId ?? 0;
-            }
-            
-            // Record the block change (set to air) in chunk diff system
-            ChunkDiffManager.Instance.RecordBlockChange(blockX, blockY, blockZ, 0); // 0 = air
-            
-            // Update the block in BlockManager if world is available
-            if (_world != null)
-            {
-                _world.BlockManager.SetBlock(blockX, blockY, blockZ, Block.Air());
-                
-                // Clear the destroy stage animation (stage 10+ removes it)
-                await BroadcastBlockDestroyStageAsync(blockX, blockY, blockZ, entityId, 10);
-                
-                // Broadcast block change to all players with this chunk loaded
-                await BroadcastBlockChangeAsync(blockX, blockY, blockZ, 0);
-                
-                // Send World Event for block break sound and particles
-                // Event 2001 = Block break + block break sound, data = original block state ID
-                await BroadcastWorldEventAsync(blockX, blockY, blockZ, 2001, originalBlockStateId);
-            }
-            
-            Console.WriteLine($"  │  ✓ Block change recorded and applied");
+            // Check if breaking session is complete, then break block
+            await HandleFinishBreakingAsync(connection, player, blockX, blockY, blockZ, entityId);
         }
     }
 
@@ -1854,7 +1828,328 @@ public class PlayHandler
     /// <summary>
     /// Broadcasts a block destroy stage animation to all players who have the chunk containing the block loaded.
     /// </summary>
-    private async Task BroadcastBlockDestroyStageAsync(int blockX, int blockY, int blockZ, int entityId, byte destroyStage)
+    /// <summary>
+    /// Handles the start of a breaking session for survival mode.
+    /// Calculates break time, creates a session, and starts the animation scheduler.
+    /// </summary>
+    private async Task HandleStartBreakingAsync(ClientConnection connection, Player player, int blockX, int blockY, int blockZ, int entityId)
+    {
+        if (_world == null || _registryManager == null)
+        {
+            Console.WriteLine($"  │  ⚠ Warning: Cannot start breaking - world or registry manager not available");
+            return;
+        }
+
+        // Get block info
+        var block = _world.BlockManager.GetBlock(blockX, blockY, blockZ);
+        if (block == null)
+        {
+            Console.WriteLine($"  │  ⚠ Warning: Block at ({blockX}, {blockY}, {blockZ}) not found");
+            return;
+        }
+
+        // Get block name from state ID
+        string blockName = _registryManager.GetBlockName(block.BlockStateId) ?? "minecraft:air";
+        
+        // Check if block is air or unbreakable
+        if (blockName == "minecraft:air" || _registryManager.IsBlockUnbreakable(blockName))
+        {
+            Console.WriteLine($"  │  ⚠ Warning: Cannot break block {blockName} (air or unbreakable)");
+            return;
+        }
+
+        // Get block hardness
+        double hardness = _registryManager.GetBlockHardness(blockName) ?? 1.5;
+        
+        // For MVP, assume player is using hand (tool speed = 1.0)
+        // TODO: Track actual held item from inventory
+        string toolName = "hand";
+        double toolSpeed = 1.0;
+
+        // Calculate break time
+        int breakTicks = BlockBreakingCalculator.CalculateBreakTicks(blockName, toolName, _registryManager);
+        
+        // Check for instant break
+        if (breakTicks == 0)
+        {
+            Console.WriteLine($"  │  → Instant break! Breaking block immediately...");
+            await BreakBlockAsync(blockX, blockY, blockZ, entityId, player.Uuid);
+            return;
+        }
+        
+        // Check for unbreakable
+        if (breakTicks == int.MaxValue)
+        {
+            Console.WriteLine($"  │  ⚠ Warning: Block {blockName} is unbreakable");
+            return;
+        }
+
+        Console.WriteLine($"  │  → Survival mode: Starting block break animation...");
+        Console.WriteLine($"  │    Block: {blockName}, Hardness: {hardness}, Tool: {toolName} (speed: {toolSpeed}), Break time: {breakTicks} ticks ({breakTicks / 20.0:F2}s)");
+
+        // Check if there's an existing session for this player (different block)
+        var existingSession = _breakingSessionManager.GetSession(player.Uuid);
+        if (existingSession != null)
+        {
+            // Cancel existing session if it's a different block
+            if (existingSession.BlockX != blockX || existingSession.BlockY != blockY || existingSession.BlockZ != blockZ)
+            {
+                Console.WriteLine($"  │    → Cancelling previous breaking session (different block)");
+                _breakingSessionManager.CancelSession(player.Uuid);
+            }
+            else
+            {
+                // Same block - continue existing session
+                Console.WriteLine($"  │    → Continuing existing breaking session");
+                return;
+            }
+        }
+
+        // Start new breaking session
+        var session = _breakingSessionManager.StartSession(
+            player.Uuid,
+            entityId,
+            blockX,
+            blockY,
+            blockZ,
+            breakTicks,
+            blockName,
+            toolName,
+            toolSpeed,
+            hardness);
+
+        // Send stage 0 immediately to other players (exclude breaking player - client handles their own animation)
+        await BroadcastBlockDestroyStageAsync(blockX, blockY, blockZ, entityId, 0, player.Uuid);
+
+        // Start animation scheduler in background
+        _ = Task.Run(async () => await RunBreakingAnimationAsync(session), session.CancellationToken.Token);
+    }
+
+    /// <summary>
+    /// Handles the cancellation of a breaking session.
+    /// Cancels the session and clears the animation.
+    /// </summary>
+    private async Task HandleCancelBreakingAsync(Guid playerUuid, int blockX, int blockY, int blockZ, int entityId)
+    {
+        var session = _breakingSessionManager.GetSession(playerUuid);
+        if (session == null)
+        {
+            // No active session - just clear animation (might be from a different session)
+            // Exclude the breaking player - client handles their own animation
+            Console.WriteLine($"  │  → Cancelled digging: No active session, clearing animation...");
+            await BroadcastBlockDestroyStageAsync(blockX, blockY, blockZ, entityId, 10, playerUuid);
+            return;
+        }
+
+        // Verify it's the same block
+        if (session.BlockX == blockX && session.BlockY == blockY && session.BlockZ == blockZ)
+        {
+            Console.WriteLine($"  │  → Cancelled digging: Cancelling breaking session...");
+            _breakingSessionManager.CancelSession(playerUuid);
+            
+            // Clear the animation (exclude breaking player - client handles their own animation)
+            await BroadcastBlockDestroyStageAsync(blockX, blockY, blockZ, entityId, 10, playerUuid);
+        }
+        else
+        {
+            // Different block - just clear animation (exclude breaking player - client handles their own animation)
+            Console.WriteLine($"  │  → Cancelled digging: Different block, clearing animation...");
+            await BroadcastBlockDestroyStageAsync(blockX, blockY, blockZ, entityId, 10, playerUuid);
+        }
+    }
+
+    /// <summary>
+    /// Handles the completion of a breaking session.
+    /// Breaks the block if enough time has elapsed.
+    /// </summary>
+    private async Task HandleFinishBreakingAsync(ClientConnection connection, Player player, int blockX, int blockY, int blockZ, int entityId)
+    {
+        var session = _breakingSessionManager.GetSession(player.Uuid);
+        if (session == null)
+        {
+            // No active session - try to break anyway (might have been cancelled/reset)
+            Console.WriteLine($"  │  → Finished digging: No active session, attempting to break block...");
+            await BreakBlockAsync(blockX, blockY, blockZ, entityId, player.Uuid);
+            return;
+        }
+
+        // Verify it's the same block
+        if (session.BlockX != blockX || session.BlockY != blockY || session.BlockZ != blockZ)
+        {
+            // Different block - just try to break
+            Console.WriteLine($"  │  → Finished digging: Different block, attempting to break...");
+            await BreakBlockAsync(blockX, blockY, blockZ, entityId, player.Uuid);
+            return;
+        }
+
+        // Check if enough time has elapsed
+        // For now, we break if the session is complete or if we're close enough
+        // In a more sophisticated implementation, we'd track actual elapsed time
+        if (session.IsComplete || session.CurrentTick >= session.TotalTicks - 1)
+        {
+            Console.WriteLine($"  │  → Survival mode: Block broken! Recording change...");
+            Console.WriteLine($"  │    Progress: {session.CurrentTick}/{session.TotalTicks} ticks ({session.Progress * 100:F1}%)");
+            
+            // Cancel the session (stop animation scheduler)
+            _breakingSessionManager.CancelSession(player.Uuid);
+            
+            // Break the block
+            await BreakBlockAsync(blockX, blockY, blockZ, entityId, player.Uuid);
+        }
+        else
+        {
+            // Not enough time elapsed - don't break yet
+            // The animation scheduler will continue and break when complete
+            Console.WriteLine($"  │  → Finished digging: Not enough time elapsed yet ({session.CurrentTick}/{session.TotalTicks} ticks)");
+            Console.WriteLine($"  │    Animation will continue until complete");
+        }
+    }
+
+    /// <summary>
+    /// Runs the breaking animation scheduler for a breaking session.
+    /// Sends animation stages 0-9 at the correct intervals.
+    /// </summary>
+    private async Task RunBreakingAnimationAsync(BlockBreakingSession session)
+    {
+        try
+        {
+            var token = session.CancellationToken.Token;
+            
+            // Stage 0 is already sent, start from stage 1
+            // Calculate when to send each stage (0-9)
+            // Stage i should be sent at tick: floor((i / 10.0) * totalTicks)
+            // This distributes stages evenly across the break time
+            int[] stageTicks = new int[10];
+            for (int stage = 0; stage <= 9; stage++)
+            {
+                stageTicks[stage] = (int)Math.Floor((stage / 10.0) * session.TotalTicks);
+            }
+
+            // Each tick is 50ms (1/20 second)
+            const int tickDurationMs = 50;
+
+            // Send stages 1-9 at the calculated intervals
+            // session.CurrentTick starts at 0 (after stage 0 is sent)
+            for (int stage = 1; stage <= 9; stage++)
+            {
+                // Check for cancellation
+                if (token.IsCancellationRequested)
+                {
+                    return;
+                }
+
+                // Calculate when to send this stage
+                int targetTick = stageTicks[stage];
+                
+                // Calculate how many ticks to wait from current position
+                int currentTick = session.CurrentTick;
+                int ticksToWait = targetTick - currentTick;
+                
+                if (ticksToWait > 0)
+                {
+                    int waitMs = ticksToWait * tickDurationMs;
+                    
+                    // Wait for the required time
+                    await Task.Delay(waitMs, token);
+                }
+
+                // Check for cancellation again after wait
+                if (token.IsCancellationRequested)
+                {
+                    return;
+                }
+
+                // Update session state
+                session.CurrentTick = targetTick;
+                session.CurrentStage = (byte)stage;
+
+                // Send the stage to other players (exclude breaking player - client handles their own animation)
+                await BroadcastBlockDestroyStageAsync(session.BlockX, session.BlockY, session.BlockZ, session.EntityId, (byte)stage, session.PlayerUuid);
+                
+                Console.WriteLine($"  │    → Sent breaking stage {stage} at tick {targetTick}/{session.TotalTicks}");
+            }
+
+            // After stage 9, wait until the total break time has elapsed
+            // The block can be broken when Status 2 (Finished digging) packet arrives
+            int remainingTicks = session.TotalTicks - session.CurrentTick;
+            if (remainingTicks > 0)
+            {
+                int waitMs = remainingTicks * tickDurationMs;
+                await Task.Delay(waitMs, token);
+            }
+
+            // Check for cancellation after final wait
+            if (token.IsCancellationRequested)
+            {
+                return;
+            }
+
+            // Mark session as complete (all ticks elapsed)
+            session.CurrentTick = session.TotalTicks;
+            
+            Console.WriteLine($"  │    ✓ Breaking animation complete (all {session.TotalTicks} ticks elapsed)");
+            
+            // Note: The block will be broken when Status 2 (Finished digging) packet is received
+            // At that point, HandleFinishBreakingAsync will check if session.IsComplete and break the block
+            
+        }
+        catch (OperationCanceledException)
+        {
+            // Session was cancelled - this is expected
+            Console.WriteLine($"  │    → Breaking animation cancelled");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"  │  ✗ Error in breaking animation scheduler: {ex.Message}");
+            Console.WriteLine($"  │    Stack trace: {ex.StackTrace}");
+        }
+    }
+
+    /// <summary>
+    /// Breaks a block at the specified coordinates.
+    /// Records the block change, updates the world, and broadcasts to players.
+    /// </summary>
+    /// <param name="blockX">Block X coordinate</param>
+    /// <param name="blockY">Block Y coordinate</param>
+    /// <param name="blockZ">Block Z coordinate</param>
+    /// <param name="entityId">Entity ID of the breaking player</param>
+    /// <param name="breakingPlayerUuid">UUID of the player breaking the block (excluded from animation broadcast)</param>
+    private async Task BreakBlockAsync(int blockX, int blockY, int blockZ, int entityId, Guid breakingPlayerUuid)
+    {
+        if (_world == null)
+        {
+            return;
+        }
+
+        // Get the original block state ID before breaking (for world event sound)
+        var originalBlock = _world.BlockManager.GetBlock(blockX, blockY, blockZ);
+        int originalBlockStateId = originalBlock?.BlockStateId ?? 0;
+
+        // Record the block change (set to air) in chunk diff system
+        ChunkDiffManager.Instance.RecordBlockChange(blockX, blockY, blockZ, 0); // 0 = air
+
+        // Update the block in BlockManager
+        _world.BlockManager.SetBlock(blockX, blockY, blockZ, Block.Air());
+
+        // Clear the destroy stage animation (stage 10+ removes it)
+        // Exclude the breaking player - client handles their own animation
+        await BroadcastBlockDestroyStageAsync(blockX, blockY, blockZ, entityId, 10, breakingPlayerUuid);
+
+        // Broadcast block change to all players with this chunk loaded
+        await BroadcastBlockChangeAsync(blockX, blockY, blockZ, 0);
+
+        // Send World Event for block break sound and particles
+        // Event 2001 = Block break + block break sound, data = original block state ID
+        await BroadcastWorldEventAsync(blockX, blockY, blockZ, 2001, originalBlockStateId);
+        
+        Console.WriteLine($"  │  ✓ Block change recorded and applied");
+    }
+
+    /// <summary>
+    /// Broadcasts a block destroy stage animation to all players who have the chunk containing the block loaded.
+    /// Excludes the player who is breaking the block (specified by excludePlayerUuid), as the client handles their own animation.
+    /// </summary>
+    private async Task BroadcastBlockDestroyStageAsync(int blockX, int blockY, int blockZ, int entityId, byte destroyStage, Guid? excludePlayerUuid = null)
     {
         if (_world == null || _getAllConnections == null)
             return;
@@ -1872,6 +2167,12 @@ public class PlayHandler
 
         foreach (var connection in allConnections)
         {
+            // Skip the player who is breaking the block (client handles their own animation)
+            if (excludePlayerUuid.HasValue && connection.PlayerUuid == excludePlayerUuid.Value)
+            {
+                continue;
+            }
+
             // Check if this connection's player has the chunk loaded
             if (connection.Player != null && connection.Player.IsChunkLoaded(chunkX, chunkZ))
             {

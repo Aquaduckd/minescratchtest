@@ -13,6 +13,12 @@ public class RegistryManager
     private Dictionary<string, Dictionary<string, JsonElement>>? _registryData;
     private Dictionary<int, string>? _itemProtocolIdToName;
     private Dictionary<string, int>? _blockDefaultStateIdByName;
+    
+    // Block breaking data
+    private Dictionary<string, double>? _blockHardness; // block name -> hardness (-1 for unbreakable)
+    private Dictionary<string, Dictionary<string, double>>? _toolSpeeds; // material -> tool_type -> speed
+    private Dictionary<string, List<string>>? _mineableTags; // tool tag -> list of block names
+    private Dictionary<int, string>? _blockStateIdToName; // block state ID -> block name
 
     public void LoadRegistries(string dataPath)
     {
@@ -21,6 +27,11 @@ public class RegistryManager
         var damageTypesFile = Path.Combine(dataPath, "damage_types.json");
         var registryDataFile = Path.Combine(dataPath, "registry_data.json");
         var blocksFile = Path.Combine(dataPath, "blocks.json");
+        
+        // Block breaking data files
+        var blockHardnessFile = Path.Combine(dataPath, "block_hardness.json");
+        var toolSpeedsFile = Path.Combine(dataPath, "tool_speeds_simplified.json");
+        var mineableTagsFile = Path.Combine(dataPath, "mineable_tags.json");
 
         // Load registries.json (has protocol_id for each entry)
         if (File.Exists(registriesFile))
@@ -118,6 +129,86 @@ public class RegistryManager
                     else if (firstId.HasValue)
                     {
                         _blockDefaultStateIdByName[blockName] = firstId.Value;
+                    }
+                }
+            }
+            catch (Exception)
+            {
+                // If parsing fails, leave map null; callers must handle missing mapping
+            }
+        }
+        
+        // Load block_hardness.json
+        if (File.Exists(blockHardnessFile))
+        {
+            try
+            {
+                _blockHardness = DataLoader.LoadJson<Dictionary<string, double>>(blockHardnessFile);
+            }
+            catch (Exception)
+            {
+                // If parsing fails, leave map null; callers must handle missing mapping
+            }
+        }
+        
+        // Load tool_speeds_simplified.json
+        if (File.Exists(toolSpeedsFile))
+        {
+            try
+            {
+                _toolSpeeds = DataLoader.LoadJson<Dictionary<string, Dictionary<string, double>>>(toolSpeedsFile);
+            }
+            catch (Exception)
+            {
+                // If parsing fails, leave map null; callers must handle missing mapping
+            }
+        }
+        
+        // Load mineable_tags.json
+        if (File.Exists(mineableTagsFile))
+        {
+            try
+            {
+                _mineableTags = DataLoader.LoadJson<Dictionary<string, List<string>>>(mineableTagsFile);
+            }
+            catch (Exception)
+            {
+                // If parsing fails, leave map null; callers must handle missing mapping
+            }
+        }
+        
+        // Build block state ID -> block name mapping from blocks.json
+        if (File.Exists(blocksFile) && _blockDefaultStateIdByName != null)
+        {
+            try
+            {
+                var blocksJson = DataLoader.LoadJson<Dictionary<string, JsonElement>>(blocksFile);
+                _blockStateIdToName = new Dictionary<int, string>();
+                
+                foreach (var kvp in blocksJson)
+                {
+                    var blockName = kvp.Key; // e.g. "minecraft:cobblestone"
+                    var blockObj = kvp.Value;
+                    if (blockObj.ValueKind != JsonValueKind.Object)
+                    {
+                        continue;
+                    }
+                    if (!blockObj.TryGetProperty("states", out var statesArray) || statesArray.ValueKind != JsonValueKind.Array)
+                    {
+                        continue;
+                    }
+                    
+                    // Map all state IDs for this block to the block name
+                    foreach (var state in statesArray.EnumerateArray())
+                    {
+                        if (state.TryGetProperty("id", out var idEl))
+                        {
+                            int stateId = idEl.GetInt32();
+                            if (!_blockStateIdToName.ContainsKey(stateId))
+                            {
+                                _blockStateIdToName[stateId] = blockName;
+                            }
+                        }
                     }
                 }
             }
@@ -285,6 +376,169 @@ public class RegistryManager
         // Many block items share identical identifiers with blocks (e.g., "minecraft:stone")
         var blockStateId = GetDefaultBlockStateIdByBlockName(itemName);
         return blockStateId;
+    }
+
+    /// <summary>
+    /// Gets the hardness value for a block.
+    /// Returns null if the block is not found in the hardness data.
+    /// Note: -1 indicates unbreakable (infinite hardness).
+    /// </summary>
+    public double? GetBlockHardness(string blockName)
+    {
+        if (_blockHardness != null && _blockHardness.TryGetValue(blockName, out var hardness))
+        {
+            return hardness;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Checks if a block is unbreakable (hardness = -1).
+    /// Returns false if the block is not found or has a valid hardness value.
+    /// </summary>
+    public bool IsBlockUnbreakable(string blockName)
+    {
+        var hardness = GetBlockHardness(blockName);
+        return hardness.HasValue && hardness.Value == -1;
+    }
+
+    /// <summary>
+    /// Gets the tool speed multiplier for a given material and tool type.
+    /// Returns null if the material/tool combination is not found.
+    /// </summary>
+    /// <param name="material">Tool material (e.g., "iron", "diamond", "wooden")</param>
+    /// <param name="toolType">Tool type (e.g., "pickaxe", "axe", "shovel", "hoe")</param>
+    /// <returns>Speed multiplier, or null if not found</returns>
+    public double? GetToolSpeed(string material, string toolType)
+    {
+        if (_toolSpeeds != null && _toolSpeeds.TryGetValue(material, out var toolTypeSpeeds))
+        {
+            if (toolTypeSpeeds.TryGetValue(toolType, out var speed))
+            {
+                return speed;
+            }
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Gets the tool speed from an item name (e.g., "minecraft:iron_pickaxe" -> 6.0).
+    /// Parses the item name to extract material and tool type.
+    /// Returns 1.0 for hand/no tool if item name doesn't match a tool pattern.
+    /// </summary>
+    /// <param name="itemName">Item identifier (e.g., "minecraft:iron_pickaxe")</param>
+    /// <returns>Speed multiplier (defaults to 1.0 for hand)</returns>
+    public double GetToolSpeedFromItemName(string itemName)
+    {
+        if (string.IsNullOrEmpty(itemName))
+        {
+            return 1.0; // Hand speed
+        }
+
+        // Remove "minecraft:" prefix if present
+        var name = itemName.StartsWith("minecraft:") ? itemName.Substring(10) : itemName;
+        
+        // Try to extract material and tool type from name (e.g., "iron_pickaxe" -> material="iron", type="pickaxe")
+        var parts = name.Split('_', 2);
+        if (parts.Length == 2)
+        {
+            var material = parts[0]; // e.g., "iron"
+            var toolType = parts[1]; // e.g., "pickaxe"
+            
+            var speed = GetToolSpeed(material, toolType);
+            if (speed.HasValue)
+            {
+                return speed.Value;
+            }
+        }
+        
+        // Special case: shears
+        if (name == "shears" || itemName == "minecraft:shears")
+        {
+            // Shears have varying speeds, but default to 2.0 for general use
+            return 2.0;
+        }
+        
+        // Default to hand speed
+        return 1.0;
+    }
+
+    /// <summary>
+    /// Checks if a tool can mine a specific block based on mineable tags.
+    /// Returns true if the tool is in the mineable tags for that block.
+    /// </summary>
+    /// <param name="toolName">Tool identifier (e.g., "minecraft:iron_pickaxe")</param>
+    /// <param name="blockName">Block identifier (e.g., "minecraft:stone")</param>
+    /// <returns>True if the tool can mine the block, false otherwise</returns>
+    public bool CanToolMineBlock(string toolName, string blockName)
+    {
+        if (_mineableTags == null || string.IsNullOrEmpty(toolName) || string.IsNullOrEmpty(blockName))
+        {
+            return false;
+        }
+
+        // Determine tool type from tool name
+        string toolType;
+        if (toolName.Contains("pickaxe"))
+        {
+            toolType = "mineable/pickaxe";
+        }
+        else if (toolName.Contains("axe"))
+        {
+            toolType = "mineable/axe";
+        }
+        else if (toolName.Contains("shovel"))
+        {
+            toolType = "mineable/shovel";
+        }
+        else if (toolName.Contains("hoe"))
+        {
+            toolType = "mineable/hoe";
+        }
+        else
+        {
+            // Hand or other tools - check if block is in any mineable tag
+            // For MVP, assume hand can "mine" any block (though slowly)
+            return true;
+        }
+
+        // Check if block is in the mineable tag for this tool type
+        if (_mineableTags.TryGetValue(toolType, out var mineableBlocks))
+        {
+            return mineableBlocks.Contains(blockName);
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Gets the block name from a block state ID.
+    /// Returns null if the state ID is not found in the mapping.
+    /// </summary>
+    /// <param name="blockStateId">Block state ID</param>
+    /// <returns>Block identifier (e.g., "minecraft:stone"), or null if not found</returns>
+    public string? GetBlockName(int blockStateId)
+    {
+        if (_blockStateIdToName != null && _blockStateIdToName.TryGetValue(blockStateId, out var blockName))
+        {
+            return blockName;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Gets the list of blocks that can be mined by a specific tool type.
+    /// Returns an empty list if the tool type is not found.
+    /// </summary>
+    /// <param name="toolType">Tool tag (e.g., "mineable/pickaxe")</param>
+    /// <returns>List of block identifiers that can be mined by this tool</returns>
+    public List<string> GetBlocksMineableByTool(string toolType)
+    {
+        if (_mineableTags != null && _mineableTags.TryGetValue(toolType, out var blocks))
+        {
+            return new List<string>(blocks);
+        }
+        return new List<string>();
     }
 
     public List<string> GetRequiredRegistryIds()

@@ -298,6 +298,507 @@ def extract_damage_type_entries(inner_jar_path: str, output_dir: str) -> List[st
     
     return damage_types
 
+def extract_tool_speeds(items_json_path: str, output_dir: str) -> Dict[str, Any]:
+    """
+    Extract tool speed multipliers from items.json.
+    Tool speeds determine how fast tools break blocks.
+    Returns a dictionary mapping tool identifiers to their speeds for different block types.
+    """
+    tool_speeds = {}
+    
+    if not os.path.exists(items_json_path):
+        print(f"  ⚠ Warning: items.json not found at {items_json_path}")
+        return tool_speeds
+    
+    try:
+        with open(items_json_path, 'r', encoding='utf-8') as f:
+            items = json.load(f)
+        
+        print(f"  → Extracting tool speeds from items.json...")
+        
+        # Materials and their base speeds (for reference)
+        # These are the speeds for mineable blocks
+        materials = ['wooden', 'stone', 'copper', 'iron', 'diamond', 'netherite', 'golden']
+        tool_types = ['pickaxe', 'axe', 'shovel', 'hoe', 'sword', 'shears']
+        
+        # Extract speeds for standard tools
+        for material in materials:
+            for tool_type in tool_types:
+                item_id = f"minecraft:{material}_{tool_type}"
+                if item_id in items:
+                    item_data = items[item_id]
+                    if isinstance(item_data, dict) and 'components' in item_data:
+                        components = item_data['components']
+                        if 'minecraft:tool' in components:
+                            tool_component = components['minecraft:tool']
+                            if 'rules' in tool_component:
+                                # Extract speeds for different block categories
+                                speeds = {}
+                                for rule in tool_component['rules']:
+                                    if 'speed' in rule:
+                                        blocks = rule.get('blocks', 'unknown')
+                                        speed = rule.get('speed', 0)
+                                        correct = rule.get('correct_for_drops', False)
+                                        
+                                        # Normalize block tag format
+                                        if isinstance(blocks, list):
+                                            blocks_str = ','.join(blocks)
+                                        else:
+                                            blocks_str = str(blocks)
+                                        
+                                        speeds[blocks_str] = {
+                                            'speed': speed,
+                                            'correct_for_drops': correct
+                                        }
+                                
+                                if speeds:
+                                    tool_speeds[item_id] = speeds
+        
+        # Handle special tools (shears, hand)
+        if 'minecraft:shears' in items:
+            item_data = items['minecraft:shears']
+            if isinstance(item_data, dict) and 'components' in item_data:
+                components = item_data['components']
+                if 'minecraft:tool' in components:
+                    tool_component = components['minecraft:tool']
+                    if 'rules' in tool_component:
+                        speeds = {}
+                        for rule in tool_component['rules']:
+                            if 'speed' in rule:
+                                blocks = rule.get('blocks', 'unknown')
+                                speed = rule.get('speed', 0)
+                                correct = rule.get('correct_for_drops', False)
+                                
+                                if isinstance(blocks, list):
+                                    blocks_str = ','.join(blocks)
+                                else:
+                                    blocks_str = str(blocks)
+                                
+                                speeds[blocks_str] = {
+                                    'speed': speed,
+                                    'correct_for_drops': correct
+                                }
+                        
+                        if speeds:
+                            tool_speeds['minecraft:shears'] = speeds
+        
+        # Add hand/no tool speed (always 1.0)
+        tool_speeds['minecraft:hand'] = {
+            'default': {
+                'speed': 1.0,
+                'correct_for_drops': False
+            }
+        }
+        
+        # Create a simplified lookup table for common case (mineable blocks)
+        simplified_speeds = {}
+        for tool_id, speeds_dict in tool_speeds.items():
+            # Find the mineable/* speed (most common case)
+            for blocks, speed_info in speeds_dict.items():
+                if 'mineable/' in blocks and speed_info.get('correct_for_drops', False):
+                    # Extract material and tool type from tool_id
+                    # e.g., "minecraft:iron_pickaxe" -> material="iron", tool_type="pickaxe"
+                    if '_' in tool_id:
+                        parts = tool_id.replace('minecraft:', '').split('_', 1)
+                        if len(parts) == 2:
+                            material, tool_type = parts
+                            if material not in simplified_speeds:
+                                simplified_speeds[material] = {}
+                            simplified_speeds[material][tool_type] = speed_info['speed']
+        
+        # Write full tool speeds
+        output_file = os.path.join(output_dir, 'tool_speeds.json')
+        with open(output_file, 'w', encoding='utf-8') as f:
+            json.dump(tool_speeds, f, indent=2, ensure_ascii=False, sort_keys=True)
+        print(f"✓ Wrote {len(tool_speeds)} tool speed entries to {output_file}")
+        
+        # Write simplified speeds for easier lookup
+        simplified_file = os.path.join(output_dir, 'tool_speeds_simplified.json')
+        with open(simplified_file, 'w', encoding='utf-8') as f:
+            json.dump(simplified_speeds, f, indent=2, ensure_ascii=False, sort_keys=True)
+        print(f"✓ Wrote simplified tool speeds to {simplified_file}")
+        print(f"    Materials: {', '.join(sorted(simplified_speeds.keys()))}")
+        
+    except Exception as e:
+        print(f"✗ Error extracting tool speeds: {e}")
+        import traceback
+        traceback.print_exc()
+    
+    return tool_speeds
+
+def extract_tool_speeds(items_json_path: str, output_dir: str) -> Dict[str, Any]:
+    """
+    Extract tool speed multipliers from items.json.
+    Tool speeds determine how fast tools break blocks.
+    Returns a dictionary mapping tool identifiers to their speeds for different block types.
+    """
+    tool_speeds = {}
+    
+    if not os.path.exists(items_json_path):
+        print(f"  ⚠ Warning: items.json not found at {items_json_path}")
+        return tool_speeds
+    
+    try:
+        with open(items_json_path, 'r', encoding='utf-8') as f:
+            items = json.load(f)
+        
+        print(f"  → Extracting tool speeds from items.json...")
+        
+        # Materials and their base speeds (for reference)
+        # These are the speeds for mineable blocks
+        materials = ['wooden', 'stone', 'copper', 'iron', 'diamond', 'netherite', 'golden']
+        tool_types = ['pickaxe', 'axe', 'shovel', 'hoe', 'sword']
+        
+        # Extract speeds for standard tools
+        for material in materials:
+            for tool_type in tool_types:
+                item_id = f"minecraft:{material}_{tool_type}"
+                if item_id in items:
+                    item_data = items[item_id]
+                    if isinstance(item_data, dict) and 'components' in item_data:
+                        components = item_data['components']
+                        if 'minecraft:tool' in components:
+                            tool_component = components['minecraft:tool']
+                            if 'rules' in tool_component:
+                                # Extract speeds for different block categories
+                                speeds = {}
+                                for rule in tool_component['rules']:
+                                    if 'speed' in rule:
+                                        blocks = rule.get('blocks', 'unknown')
+                                        speed = rule.get('speed', 0)
+                                        correct = rule.get('correct_for_drops', False)
+                                        
+                                        # Normalize block tag format
+                                        if isinstance(blocks, list):
+                                            blocks_str = ','.join(blocks)
+                                        else:
+                                            blocks_str = str(blocks)
+                                        
+                                        speeds[blocks_str] = {
+                                            'speed': speed,
+                                            'correct_for_drops': correct
+                                        }
+                                
+                                if speeds:
+                                    tool_speeds[item_id] = speeds
+        
+        # Handle special tools (shears, hand)
+        if 'minecraft:shears' in items:
+            item_data = items['minecraft:shears']
+            if isinstance(item_data, dict) and 'components' in item_data:
+                components = item_data['components']
+                if 'minecraft:tool' in components:
+                    tool_component = components['minecraft:tool']
+                    if 'rules' in tool_component:
+                        speeds = {}
+                        for rule in tool_component['rules']:
+                            if 'speed' in rule:
+                                blocks = rule.get('blocks', 'unknown')
+                                speed = rule.get('speed', 0)
+                                correct = rule.get('correct_for_drops', False)
+                                
+                                if isinstance(blocks, list):
+                                    blocks_str = ','.join(blocks)
+                                else:
+                                    blocks_str = str(blocks)
+                                
+                                speeds[blocks_str] = {
+                                    'speed': speed,
+                                    'correct_for_drops': correct
+                                }
+                        
+                        if speeds:
+                            tool_speeds['minecraft:shears'] = speeds
+        
+        # Add hand/no tool speed (always 1.0)
+        tool_speeds['minecraft:hand'] = {
+            'default': {
+                'speed': 1.0,
+                'correct_for_drops': False
+            }
+        }
+        
+        # Create a simplified lookup table for common case (mineable blocks)
+        simplified_speeds = {}
+        for tool_id, speeds_dict in tool_speeds.items():
+            # Find the mineable/* speed (most common case)
+            for blocks, speed_info in speeds_dict.items():
+                if 'mineable/' in blocks and speed_info.get('correct_for_drops', False):
+                    # Extract material and tool type from tool_id
+                    # e.g., "minecraft:iron_pickaxe" -> material="iron", tool_type="pickaxe"
+                    if '_' in tool_id:
+                        parts = tool_id.replace('minecraft:', '').split('_', 1)
+                        if len(parts) == 2:
+                            material, tool_type = parts
+                            if material not in simplified_speeds:
+                                simplified_speeds[material] = {}
+                            simplified_speeds[material][tool_type] = speed_info['speed']
+        
+        # Write full tool speeds
+        output_file = os.path.join(output_dir, 'tool_speeds.json')
+        with open(output_file, 'w', encoding='utf-8') as f:
+            json.dump(tool_speeds, f, indent=2, ensure_ascii=False, sort_keys=True)
+        print(f"✓ Wrote {len(tool_speeds)} tool speed entries to {output_file}")
+        
+        # Write simplified speeds for easier lookup
+        simplified_file = os.path.join(output_dir, 'tool_speeds_simplified.json')
+        with open(simplified_file, 'w', encoding='utf-8') as f:
+            json.dump(simplified_speeds, f, indent=2, ensure_ascii=False, sort_keys=True)
+        print(f"✓ Wrote simplified tool speeds to {simplified_file}")
+        print(f"    Materials: {', '.join(sorted(simplified_speeds.keys()))}")
+        
+    except Exception as e:
+        print(f"✗ Error extracting tool speeds: {e}")
+        import traceback
+        traceback.print_exc()
+    
+    return tool_speeds
+
+def extract_block_hardness(breaking_doc_path: str, output_dir: str) -> Dict[str, float]:
+    """
+    Extract block hardness values from the Breaking documentation HTML.
+    Hardness values determine how long it takes to break blocks.
+    Returns a dictionary mapping block identifiers to hardness values.
+    Note: -1 means unbreakable (infinite hardness).
+    """
+    import re
+    import html
+    
+    block_hardness = {}
+    
+    if not os.path.exists(breaking_doc_path):
+        print(f"  ⚠ Warning: Breaking documentation not found at {breaking_doc_path}")
+        print(f"    Hardness values will need to be manually extracted or hardcoded")
+        return block_hardness
+    
+    try:
+        # Try to use BeautifulSoup for better parsing, fallback to html.parser if not available
+        try:
+            from bs4 import BeautifulSoup
+            use_bs4 = True
+        except ImportError:
+            use_bs4 = False
+        
+        with open(breaking_doc_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        print(f"  → Extracting block hardness values from documentation table...")
+        
+        if use_bs4:
+            # Use BeautifulSoup for proper HTML parsing
+            soup = BeautifulSoup(content, 'html.parser')
+            
+            # Find the hardness table
+            hardness_table = None
+            for h2 in soup.find_all('h2'):
+                if h2.get('id') == 'Blocks_by_hardness' or (h2.text and 'Blocks by hardness' in h2.text):
+                    # Find the next table after this heading
+                    for sibling in h2.next_siblings:
+                        if sibling.name == 'table' or (hasattr(sibling, 'name') and sibling.name == 'table'):
+                            hardness_table = sibling
+                            break
+                        elif sibling.name == 'div':
+                            # Sometimes the table is inside a div
+                            table = sibling.find('table', class_='wikitable sortable')
+                            if table:
+                                hardness_table = table
+                                break
+                    if hardness_table:
+                        break
+            
+            # Also try finding by class directly
+            if not hardness_table:
+                tables = soup.find_all('table', class_='wikitable sortable')
+                # Find the one with "Blocks by hardness" heading nearby
+                for table in tables:
+                    prev = table.find_previous('h2')
+                    if prev and ('Blocks by hardness' in prev.text or prev.get('id') == 'Blocks_by_hardness'):
+                        hardness_table = table
+                        break
+            
+            if hardness_table:
+                # Parse table rows
+                rows = hardness_table.find('tbody').find_all('tr') if hardness_table.find('tbody') else hardness_table.find_all('tr')
+                
+                # Skip header rows (first 2 rows are usually headers)
+                for row in rows[2:]:
+                    try:
+                        # Find block name from <th> or first cell
+                        th = row.find('th')
+                        if not th:
+                            continue
+                        
+                        # Extract block name from title attribute or sprite-text
+                        block_name = None
+                        title_link = th.find('a', href=True)
+                        if title_link and title_link.get('title'):
+                            block_name = title_link.get('title')
+                        
+                        # Fallback to sprite-text
+                        if not block_name:
+                            sprite_text = th.find(class_='sprite-text')
+                            if sprite_text:
+                                block_name = sprite_text.get_text(strip=True)
+                        
+                        # Fallback to all text in th
+                        if not block_name:
+                            block_name = th.get_text(strip=True)
+                        
+                        if not block_name or block_name.lower() in ['block', 'hardness', 'tool', 'breaking']:
+                            continue
+                        
+                        # Normalize block name to minecraft: format
+                        block_name = block_name.lower().replace(' ', '_').replace("'", '')
+                        if not block_name.startswith('minecraft:'):
+                            block_name = f"minecraft:{block_name}"
+                        
+                        # Extract hardness from second <td>
+                        cells = row.find_all('td')
+                        if len(cells) < 1:
+                            continue
+                        
+                        hardness_cell = cells[0]  # First td is hardness
+                        hardness_value = None
+                        
+                        # Check data-sort-value first
+                        sort_value = hardness_cell.get('data-sort-value')
+                        if sort_value:
+                            if sort_value == '9999':
+                                hardness_value = -1  # Infinite/unbreakable
+                            else:
+                                try:
+                                    hardness_value = float(sort_value)
+                                except (ValueError, TypeError):
+                                    pass
+                        
+                        # Fallback to text content
+                        if hardness_value is None:
+                            hardness_text = hardness_cell.get_text(strip=True)
+                            # Handle HTML entities
+                            hardness_text = html.unescape(hardness_text)
+                            
+                            if 'infinite' in hardness_text.lower() or hardness_text == '∞' or hardness_text == '—':
+                                hardness_value = -1
+                            elif hardness_text.startswith('-1'):
+                                hardness_value = -1
+                            else:
+                                # Try to extract number
+                                num_match = re.search(r'([0-9.]+)', hardness_text)
+                                if num_match:
+                                    try:
+                                        hardness_value = float(num_match.group(1))
+                                    except (ValueError, TypeError):
+                                        pass
+                        
+                        if hardness_value is not None:
+                            block_hardness[block_name] = hardness_value
+                            
+                    except Exception as e:
+                        # Skip rows that fail to parse
+                        continue
+                
+                print(f"    Parsed {len(block_hardness)} block hardness values from HTML table")
+            else:
+                print(f"    ⚠ Warning: Could not find hardness table in HTML")
+        else:
+            # Fallback: use built-in html.parser
+            print(f"    ⚠ Warning: BeautifulSoup not available, using simpler extraction")
+            # Use the hardcoded approach as fallback
+            block_hardness = {
+                "minecraft:stone": 1.5,
+                "minecraft:cobblestone": 2.0,
+                "minecraft:dirt": 0.5,
+                "minecraft:grass_block": 0.6,
+                "minecraft:wood": 2.0,
+                "minecraft:planks": 2.0,
+                "minecraft:gravel": 0.6,
+                "minecraft:sand": 0.5,
+                "minecraft:bedrock": -1,
+                "minecraft:obsidian": 50.0,
+                "minecraft:iron_block": 5.0,
+                "minecraft:diamond_block": 5.0,
+                "minecraft:gold_block": 3.0,
+                "minecraft:emerald_block": 5.0,
+            }
+        
+        # Write block hardness to JSON file
+        output_file = os.path.join(output_dir, 'block_hardness.json')
+        with open(output_file, 'w', encoding='utf-8') as f:
+            json.dump(block_hardness, f, indent=2, ensure_ascii=False, sort_keys=True)
+        print(f"✓ Wrote {len(block_hardness)} block hardness values to {output_file}")
+        
+    except Exception as e:
+        print(f"✗ Error extracting block hardness: {e}")
+        import traceback
+        traceback.print_exc()
+    
+    return block_hardness
+
+def extract_block_tags(inner_jar_path: str, output_dir: str) -> Dict[str, Any]:
+    """
+    Extract block tags, especially mineable tags that indicate which tools can mine which blocks.
+    Returns a dictionary mapping tag names to lists of block identifiers.
+    """
+    block_tags = {}
+    
+    if not os.path.exists(inner_jar_path):
+        print(f"Error: Inner JAR not found at {inner_jar_path}")
+        return block_tags
+    
+    try:
+        with zipfile.ZipFile(inner_jar_path, 'r') as inner_jar:
+            all_files = inner_jar.namelist()
+            
+            # Find all block tag files
+            tag_files = [f for f in all_files 
+                        if f.startswith('data/minecraft/tags/block/') 
+                        and f.endswith('.json')]
+            
+            print(f"Found {len(tag_files)} block tag files")
+            
+            # Extract mineable tags (most important for block breaking)
+            mineable_tags = [f for f in tag_files if 'mineable' in f]
+            print(f"  Found {len(mineable_tags)} mineable tag files")
+            
+            for tag_file in tag_files:
+                try:
+                    tag_data = inner_jar.read(tag_file)
+                    tag_json = json.loads(tag_data.decode('utf-8'))
+                    
+                    # Extract tag name from path
+                    # e.g., "data/minecraft/tags/block/mineable/pickaxe.json" -> "mineable/pickaxe"
+                    parts = tag_file.split('/')
+                    tag_name = '/'.join(parts[parts.index('block') + 1:]).replace('.json', '')
+                    
+                    # Extract block values from tag
+                    if 'values' in tag_json:
+                        block_tags[tag_name] = tag_json['values']
+                    else:
+                        block_tags[tag_name] = []
+                        
+                except Exception as e:
+                    print(f"  ⚠ Warning: Could not parse tag file {tag_file}: {e}")
+                    continue
+        
+        # Write block tags to JSON file
+        output_file = os.path.join(output_dir, 'block_tags.json')
+        with open(output_file, 'w', encoding='utf-8') as f:
+            json.dump(block_tags, f, indent=2, ensure_ascii=False)
+        print(f"✓ Wrote {len(block_tags)} block tags to {output_file}")
+        
+        # Create a separate file specifically for mineable tags (most useful for block breaking)
+        mineable_tag_data = {k: v for k, v in block_tags.items() if 'mineable' in k}
+        if mineable_tag_data:
+            mineable_file = os.path.join(output_dir, 'mineable_tags.json')
+            with open(mineable_file, 'w', encoding='utf-8') as f:
+                json.dump(mineable_tag_data, f, indent=2, ensure_ascii=False)
+            print(f"✓ Wrote {len(mineable_tag_data)} mineable tags to {mineable_file}")
+        
+    except Exception as e:
+        print(f"✗ Error extracting block tags: {e}")
+    
+    return block_tags
+
 def extract_configuration_registries(inner_jar_path: str, output_dir: str, project_root: str):
     """
     Extract registries needed for configuration phase.
@@ -572,6 +1073,34 @@ def create_extraction_summary(output_dir: str):
                 ],
                 "source": "server.jar -> inner JAR -> data/minecraft/damage_type/*.json"
             },
+            "block_tags": {
+                "description": "Block tags extracted from data/minecraft/tags/block/, including mineable tags",
+                "files": [
+                    "block_tags.json - All block tags with their associated blocks",
+                    "mineable_tags.json - Mineable tags indicating which tools can mine which blocks"
+                ],
+                "source": "server.jar -> inner JAR -> data/minecraft/tags/block/*.json",
+                "usage": "Mineable tags are essential for block breaking - they indicate which tools (pickaxe, shovel, axe, hoe) can efficiently mine which blocks"
+            },
+            "tool_speeds": {
+                "description": "Tool speed multipliers extracted from items.json",
+                "files": [
+                    "tool_speeds.json - Full tool speeds for all tools and block types",
+                    "tool_speeds_simplified.json - Simplified lookup table (material -> tool_type -> speed)"
+                ],
+                "source": "server.jar -> items.json -> components.minecraft:tool.rules[].speed",
+                "usage": "Tool speeds determine how fast tools break blocks. Used with block hardness to calculate break time.",
+                "note": "Speeds: wooden=2, stone=4, copper=5, iron=6, diamond=8, netherite=9, golden=12. Hand=1.0 (no tool)."
+            },
+            "block_hardness": {
+                "description": "Block hardness values extracted from Breaking documentation",
+                "files": [
+                    "block_hardness.json - Hardness values for all blocks (hardness determines break time)"
+                ],
+                "source": "docs/protocol/Breaking – Minecraft Wiki.html (parsed from HTML table using BeautifulSoup)",
+                "usage": "Hardness values are used to calculate break time. Combined with tool speeds to determine actual break time.",
+                "note": "Hardness values: -1 = unbreakable (infinite), 0.5 = soft (dirt/sand), 1.5 = stone, 50.0 = obsidian, etc."
+            },
             "registries": {
                 "description": "Registry data (copied from generated/reports/)",
                 "files": [
@@ -619,6 +1148,9 @@ def create_extraction_summary(output_dir: str):
             "loot_tables": "Used in load_loot_tables() to determine item drops from broken blocks",
             "biomes": "Used in get_registry_entries() for minecraft:worldgen/biome registry",
             "damage_types": "Used in get_registry_entries() for minecraft:damage_type registry",
+            "block_tags": "Used for block breaking logic - mineable tags indicate which tools can mine which blocks efficiently",
+            "tool_speeds": "Used to calculate break time for block breaking animations - tool speed multipliers for different materials",
+            "block_hardness": "Used to calculate break time for block breaking animations - determines base hardness of each block",
             "registries": "Used throughout server for protocol ID lookups (items, entities, etc.)",
             "blocks": "Used for block state ID to block name mappings"
         }
@@ -671,19 +1203,36 @@ def main():
     damage_types = extract_damage_type_entries(inner_jar_path, output_dir)
     print()
     
-    # Step 5: Extract configuration registries
+    # Step 5: Extract block tags (especially mineable tags for block breaking)
+    print("Extracting block tags...")
+    block_tags = extract_block_tags(inner_jar_path, output_dir)
+    print()
+    
+    # Step 6: Extract tool speeds from items.json
+    items_json_path = os.path.join(output_dir, 'items.json')
+    print("Extracting tool speeds...")
+    tool_speeds = extract_tool_speeds(items_json_path, output_dir)
+    print()
+    
+    # Step 7: Extract block hardness values from Breaking documentation
+    breaking_doc_path = os.path.join(project_root, 'docs', 'protocol', 'Breaking – Minecraft Wiki.html')
+    print("Extracting block hardness values...")
+    block_hardness = extract_block_hardness(breaking_doc_path, output_dir)
+    print()
+    
+    # Step 8: Extract configuration registries
     print("Extracting configuration registries...")
     config_registries = extract_configuration_registries(inner_jar_path, output_dir, project_root)
     print()
     
-    # Step 6: Generate reports (if needed)
+    # Step 7: Generate reports (if needed)
     print("Checking for generated reports...")
     reports_generated = generate_reports(jar_path, project_root)
     if not reports_generated:
         print("  ⚠ Warning: Could not generate reports. Will try to copy existing ones if available.")
     print()
     
-    # Step 7: Copy files from generated/reports/
+    # Step 8: Copy files from generated/reports/
     print("Copying files from generated/reports/...")
     copied_count = copy_generated_reports(output_dir, project_root)
     if copied_count == 0:
@@ -692,12 +1241,12 @@ def main():
         print(f"✓ Copied {copied_count} files from generated/reports/")
     print()
     
-    # Step 8: Create summary
+    # Step 9: Create summary
     print("Creating extraction summary...")
     create_extraction_summary(output_dir)
     print()
     
-    # Step 9: Cleanup temporary files and directories
+    # Step 10: Cleanup temporary files and directories
     print("Cleaning up temporary files and directories...")
     cleanup_temp_files(inner_jar_path, project_root)
     print()
@@ -712,6 +1261,11 @@ def main():
     print(f"  - loot_table_mappings.json (simplified mappings)")
     print(f"  - biomes.json ({len(biomes)} entries)")
     print(f"  - damage_types.json ({len(damage_types)} entries)")
+    print(f"  - block_tags.json ({len(block_tags)} tags)")
+    print(f"  - mineable_tags.json (tools that can mine blocks)")
+    print(f"  - tool_speeds.json ({len(tool_speeds)} tool entries)")
+    print(f"  - tool_speeds_simplified.json (material -> tool -> speed lookup)")
+    print(f"  - block_hardness.json ({len(block_hardness)} blocks)")
     print(f"  - registry_data.json ({len(config_registries)} registries for configuration)")
     print(f"  - registries.json (copied - protocol IDs for play phase)")
     print(f"  - blocks.json (copied)")

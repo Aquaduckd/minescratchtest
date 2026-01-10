@@ -1,0 +1,44 @@
+{
+  "copper": {
+    "axe": 5.0,
+    "hoe": 5.0,
+    "pickaxe": 5.0,
+    "shovel": 5.0
+  },
+  "diamond": {
+    "axe": 8.0,
+    "hoe": 8.0,
+    "pickaxe": 8.0,
+    "shovel": 8.0
+  },
+  "golden": {
+    "axe": 12.0,
+    "hoe": 12.0,
+    "pickaxe": 12.0,
+    "shovel": 12.0
+  },
+  "iron": {
+    "axe": 6.0,
+    "hoe": 6.0,
+    "pickaxe": 6.0,
+    "shovel": 6.0
+  },
+  "netherite": {
+    "axe": 9.0,
+    "hoe": 9.0,
+    "pickaxe": 9.0,
+    "shovel": 9.0
+  },
+  "stone": {
+    "axe": 4.0,
+    "hoe": 4.0,
+    "pickaxe": 4.0,
+    "shovel": 4.0
+  },
+  "wooden": {
+    "axe": 2.0,
+    "hoe": 2.0,
+    "pickaxe": 2.0,
+    "shovel": 2.0
+  }
+}

@@ -1,5 +1,5 @@
 {
-  "extraction_date": "2026-01-05T14:06:30.566520",
+  "extraction_date": "2026-01-09T20:56:25.044184",
   "minecraft_version": "1.21.10",
   "protocol_version": 773,
   "extracted_data": {
@@ -24,6 +24,34 @@
         "damage_types.json - List of all damage type resource IDs"
       ],
       "source": "server.jar -> inner JAR -> data/minecraft/damage_type/*.json"
+    },
+    "block_tags": {
+      "description": "Block tags extracted from data/minecraft/tags/block/, including mineable tags",
+      "files": [
+        "block_tags.json - All block tags with their associated blocks",
+        "mineable_tags.json - Mineable tags indicating which tools can mine which blocks"
+      ],
+      "source": "server.jar -> inner JAR -> data/minecraft/tags/block/*.json",
+      "usage": "Mineable tags are essential for block breaking - they indicate which tools (pickaxe, shovel, axe, hoe) can efficiently mine which blocks"
+    },
+    "tool_speeds": {
+      "description": "Tool speed multipliers extracted from items.json",
+      "files": [
+        "tool_speeds.json - Full tool speeds for all tools and block types",
+        "tool_speeds_simplified.json - Simplified lookup table (material -> tool_type -> speed)"
+      ],
+      "source": "server.jar -> items.json -> components.minecraft:tool.rules[].speed",
+      "usage": "Tool speeds determine how fast tools break blocks. Used with block hardness to calculate break time.",
+      "note": "Speeds: wooden=2, stone=4, copper=5, iron=6, diamond=8, netherite=9, golden=12. Hand=1.0 (no tool)."
+    },
+    "block_hardness": {
+      "description": "Block hardness values extracted from Breaking documentation",
+      "files": [
+        "block_hardness.json - Hardness values for all blocks (hardness determines break time)"
+      ],
+      "source": "docs/protocol/Breaking – Minecraft Wiki.html (parsed from HTML table using BeautifulSoup)",
+      "usage": "Hardness values are used to calculate break time. Combined with tool speeds to determine actual break time.",
+      "note": "Hardness values: -1 = unbreakable (infinite), 0.5 = soft (dirt/sand), 1.5 = stone, 50.0 = obsidian, etc."
     },
     "registries": {
       "description": "Registry data (copied from generated/reports/)",
@@ -72,6 +100,9 @@
     "loot_tables": "Used in load_loot_tables() to determine item drops from broken blocks",
     "biomes": "Used in get_registry_entries() for minecraft:worldgen/biome registry",
     "damage_types": "Used in get_registry_entries() for minecraft:damage_type registry",
+    "block_tags": "Used for block breaking logic - mineable tags indicate which tools can mine which blocks efficiently",
+    "tool_speeds": "Used to calculate break time for block breaking animations - tool speed multipliers for different materials",
+    "block_hardness": "Used to calculate break time for block breaking animations - determines base hardness of each block",
     "registries": "Used throughout server for protocol ID lookups (items, entities, etc.)",
     "blocks": "Used for block state ID to block name mappings"
   }

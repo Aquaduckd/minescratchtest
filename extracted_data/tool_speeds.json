@@ -1,0 +1,292 @@
+{
+  "minecraft:copper_axe": {
+    "#minecraft:mineable/axe": {
+      "correct_for_drops": true,
+      "speed": 5.0
+    }
+  },
+  "minecraft:copper_hoe": {
+    "#minecraft:mineable/hoe": {
+      "correct_for_drops": true,
+      "speed": 5.0
+    }
+  },
+  "minecraft:copper_pickaxe": {
+    "#minecraft:mineable/pickaxe": {
+      "correct_for_drops": true,
+      "speed": 5.0
+    }
+  },
+  "minecraft:copper_shovel": {
+    "#minecraft:mineable/shovel": {
+      "correct_for_drops": true,
+      "speed": 5.0
+    }
+  },
+  "minecraft:copper_sword": {
+    "#minecraft:sword_efficient": {
+      "correct_for_drops": false,
+      "speed": 1.5
+    },
+    "#minecraft:sword_instantly_mines": {
+      "correct_for_drops": false,
+      "speed": 3.4028235e+38
+    },
+    "minecraft:cobweb": {
+      "correct_for_drops": true,
+      "speed": 15.0
+    }
+  },
+  "minecraft:diamond_axe": {
+    "#minecraft:mineable/axe": {
+      "correct_for_drops": true,
+      "speed": 8.0
+    }
+  },
+  "minecraft:diamond_hoe": {
+    "#minecraft:mineable/hoe": {
+      "correct_for_drops": true,
+      "speed": 8.0
+    }
+  },
+  "minecraft:diamond_pickaxe": {
+    "#minecraft:mineable/pickaxe": {
+      "correct_for_drops": true,
+      "speed": 8.0
+    }
+  },
+  "minecraft:diamond_shovel": {
+    "#minecraft:mineable/shovel": {
+      "correct_for_drops": true,
+      "speed": 8.0
+    }
+  },
+  "minecraft:diamond_sword": {
+    "#minecraft:sword_efficient": {
+      "correct_for_drops": false,
+      "speed": 1.5
+    },
+    "#minecraft:sword_instantly_mines": {
+      "correct_for_drops": false,
+      "speed": 3.4028235e+38
+    },
+    "minecraft:cobweb": {
+      "correct_for_drops": true,
+      "speed": 15.0
+    }
+  },
+  "minecraft:golden_axe": {
+    "#minecraft:mineable/axe": {
+      "correct_for_drops": true,
+      "speed": 12.0
+    }
+  },
+  "minecraft:golden_hoe": {
+    "#minecraft:mineable/hoe": {
+      "correct_for_drops": true,
+      "speed": 12.0
+    }
+  },
+  "minecraft:golden_pickaxe": {
+    "#minecraft:mineable/pickaxe": {
+      "correct_for_drops": true,
+      "speed": 12.0
+    }
+  },
+  "minecraft:golden_shovel": {
+    "#minecraft:mineable/shovel": {
+      "correct_for_drops": true,
+      "speed": 12.0
+    }
+  },
+  "minecraft:golden_sword": {
+    "#minecraft:sword_efficient": {
+      "correct_for_drops": false,
+      "speed": 1.5
+    },
+    "#minecraft:sword_instantly_mines": {
+      "correct_for_drops": false,
+      "speed": 3.4028235e+38
+    },
+    "minecraft:cobweb": {
+      "correct_for_drops": true,
+      "speed": 15.0
+    }
+  },
+  "minecraft:hand": {
+    "default": {
+      "correct_for_drops": false,
+      "speed": 1.0
+    }
+  },
+  "minecraft:iron_axe": {
+    "#minecraft:mineable/axe": {
+      "correct_for_drops": true,
+      "speed": 6.0
+    }
+  },
+  "minecraft:iron_hoe": {
+    "#minecraft:mineable/hoe": {
+      "correct_for_drops": true,
+      "speed": 6.0
+    }
+  },
+  "minecraft:iron_pickaxe": {
+    "#minecraft:mineable/pickaxe": {
+      "correct_for_drops": true,
+      "speed": 6.0
+    }
+  },
+  "minecraft:iron_shovel": {
+    "#minecraft:mineable/shovel": {
+      "correct_for_drops": true,
+      "speed": 6.0
+    }
+  },
+  "minecraft:iron_sword": {
+    "#minecraft:sword_efficient": {
+      "correct_for_drops": false,
+      "speed": 1.5
+    },
+    "#minecraft:sword_instantly_mines": {
+      "correct_for_drops": false,
+      "speed": 3.4028235e+38
+    },
+    "minecraft:cobweb": {
+      "correct_for_drops": true,
+      "speed": 15.0
+    }
+  },
+  "minecraft:netherite_axe": {
+    "#minecraft:mineable/axe": {
+      "correct_for_drops": true,
+      "speed": 9.0
+    }
+  },
+  "minecraft:netherite_hoe": {
+    "#minecraft:mineable/hoe": {
+      "correct_for_drops": true,
+      "speed": 9.0
+    }
+  },
+  "minecraft:netherite_pickaxe": {
+    "#minecraft:mineable/pickaxe": {
+      "correct_for_drops": true,
+      "speed": 9.0
+    }
+  },
+  "minecraft:netherite_shovel": {
+    "#minecraft:mineable/shovel": {
+      "correct_for_drops": true,
+      "speed": 9.0
+    }
+  },
+  "minecraft:netherite_sword": {
+    "#minecraft:sword_efficient": {
+      "correct_for_drops": false,
+      "speed": 1.5
+    },
+    "#minecraft:sword_instantly_mines": {
+      "correct_for_drops": false,
+      "speed": 3.4028235e+38
+    },
+    "minecraft:cobweb": {
+      "correct_for_drops": true,
+      "speed": 15.0
+    }
+  },
+  "minecraft:shears": {
+    "#minecraft:leaves": {
+      "correct_for_drops": false,
+      "speed": 15.0
+    },
+    "#minecraft:wool": {
+      "correct_for_drops": false,
+      "speed": 5.0
+    },
+    "minecraft:cobweb": {
+      "correct_for_drops": true,
+      "speed": 15.0
+    },
+    "minecraft:vine,minecraft:glow_lichen": {
+      "correct_for_drops": false,
+      "speed": 2.0
+    }
+  },
+  "minecraft:stone_axe": {
+    "#minecraft:mineable/axe": {
+      "correct_for_drops": true,
+      "speed": 4.0
+    }
+  },
+  "minecraft:stone_hoe": {
+    "#minecraft:mineable/hoe": {
+      "correct_for_drops": true,
+      "speed": 4.0
+    }
+  },
+  "minecraft:stone_pickaxe": {
+    "#minecraft:mineable/pickaxe": {
+      "correct_for_drops": true,
+      "speed": 4.0
+    }
+  },
+  "minecraft:stone_shovel": {
+    "#minecraft:mineable/shovel": {
+      "correct_for_drops": true,
+      "speed": 4.0
+    }
+  },
+  "minecraft:stone_sword": {
+    "#minecraft:sword_efficient": {
+      "correct_for_drops": false,
+      "speed": 1.5
+    },
+    "#minecraft:sword_instantly_mines": {
+      "correct_for_drops": false,
+      "speed": 3.4028235e+38
+    },
+    "minecraft:cobweb": {
+      "correct_for_drops": true,
+      "speed": 15.0
+    }
+  },
+  "minecraft:wooden_axe": {
+    "#minecraft:mineable/axe": {
+      "correct_for_drops": true,
+      "speed": 2.0
+    }
+  },
+  "minecraft:wooden_hoe": {
+    "#minecraft:mineable/hoe": {
+      "correct_for_drops": true,
+      "speed": 2.0
+    }
+  },
+  "minecraft:wooden_pickaxe": {
+    "#minecraft:mineable/pickaxe": {
+      "correct_for_drops": true,
+      "speed": 2.0
+    }
+  },
+  "minecraft:wooden_shovel": {
+    "#minecraft:mineable/shovel": {
+      "correct_for_drops": true,
+      "speed": 2.0
+    }
+  },
+  "minecraft:wooden_sword": {
+    "#minecraft:sword_efficient": {
+      "correct_for_drops": false,
+      "speed": 1.5
+    },
+    "#minecraft:sword_instantly_mines": {
+      "correct_for_drops": false,
+      "speed": 3.4028235e+38
+    },
+    "minecraft:cobweb": {
+      "correct_for_drops": true,
+      "speed": 15.0
+    }
+  }
+}
