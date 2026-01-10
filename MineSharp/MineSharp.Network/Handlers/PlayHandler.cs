@@ -1579,6 +1579,37 @@ public class PlayHandler
     }
 
     /// <summary>
+    /// Handles Player Input packets (0x2A).
+    /// Processes key presses/releases including shift (sneaking).
+    /// </summary>
+    public async Task HandlePlayerInputAsync(ClientConnection connection, PlayerInputPacket packet)
+    {
+        var player = connection.Player;
+        if (player == null)
+        {
+            Console.WriteLine($"  │  ⚠ Warning: Received player input but player is not set");
+            return;
+        }
+
+        var isSneaking = packet.IsSneak;
+
+        // Update player's sneaking state
+        bool stateChanged = player.UpdateSneakingState(isSneaking);
+
+        if (stateChanged)
+        {
+            var action = isSneaking ? "started sneaking" : "stopped sneaking";
+            Console.WriteLine($"  │  ← Player {connection.Username ?? "Unknown"} {action}");
+
+            // Broadcast sneaking state change to all visible players
+            if (_visibilityManager != null)
+            {
+                await _visibilityManager.BroadcastEntityMetadataUpdateAsync(player, player.EntityId, isSneaking);
+            }
+        }
+    }
+
+    /// <summary>
     /// Escapes special characters in a string for JSON.
     /// Handles quotes, backslashes, and control characters.
     /// </summary>

@@ -378,6 +378,47 @@ public class PlayerVisibilityManager
     }
 
     /// <summary>
+    /// Broadcasts an entity metadata update to all players who can see the entity.
+    /// Used for updating sneaking state, pose, and other metadata changes.
+    /// </summary>
+    /// <param name="player">The player whose entity metadata is being updated</param>
+    /// <param name="entityId">The entity ID to update</param>
+    /// <param name="isSneaking">Whether the entity is sneaking</param>
+    public async Task BroadcastEntityMetadataUpdateAsync(Player player, int entityId, bool isSneaking)
+    {
+        if (player == null)
+        {
+            return;
+        }
+
+        var allConnections = _getAllConnections().ToList();
+        var metadataPacket = PacketBuilder.BuildSetEntityMetadataPacket(entityId, isSneaking);
+
+        foreach (var connection in allConnections)
+        {
+            if (connection.Player == null || connection.Player == player)
+            {
+                continue; // Skip self and connections without players
+            }
+
+            var viewer = connection.Player;
+
+            // Only send to players who can see this entity
+            if (viewer.IsEntityVisible(entityId))
+            {
+                try
+                {
+                    await connection.SendPacketAsync(metadataPacket);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Error broadcasting entity metadata update to player: {ex.Message}");
+                }
+            }
+        }
+    }
+
+    /// <summary>
     /// Spawns a player entity for a client connection.
     /// Note: Player Info Update should be sent separately before this (step 33/34).
     /// </summary>

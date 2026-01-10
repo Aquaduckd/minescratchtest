@@ -113,6 +113,10 @@ public class PacketParser
             {
                 return (packetId, ParseChatMessage(reader));
             }
+            else if (packetId == 0x2A) // Player Input
+            {
+                return (packetId, ParsePlayerInput(reader));
+            }
         }
         
         // Unknown packet
@@ -795,6 +799,29 @@ public class PacketParser
             Message = message,
             Timestamp = timestamp,
             Salt = salt
+        };
+    }
+    
+    private static PlayerInputPacket ParsePlayerInput(ProtocolReader reader)
+    {
+        var flags = reader.ReadByte();
+        
+        // Parse flags into readable format for logging
+        var flagsList = new List<string>();
+        if ((flags & 0x01) != 0) flagsList.Add("Forward");
+        if ((flags & 0x02) != 0) flagsList.Add("Backward");
+        if ((flags & 0x04) != 0) flagsList.Add("Left");
+        if ((flags & 0x08) != 0) flagsList.Add("Right");
+        if ((flags & 0x10) != 0) flagsList.Add("Jump");
+        if ((flags & 0x20) != 0) flagsList.Add("Sneak");
+        if ((flags & 0x40) != 0) flagsList.Add("Sprint");
+        
+        var flagsStr = flagsList.Count > 0 ? string.Join(", ", flagsList) : "None";
+        Console.WriteLine($"  │  → Parsed PlayerInputPacket (0x2A): Flags: 0x{flags:X2} ({flagsStr})");
+        
+        return new PlayerInputPacket
+        {
+            Flags = flags
         };
     }
 }

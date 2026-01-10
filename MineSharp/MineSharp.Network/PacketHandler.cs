@@ -130,6 +130,10 @@ public class PacketHandler
             {
                 await _playHandler.HandleChatMessageAsync(connection, chatMessagePacket);
             }
+            else if (packetId == 0x2A && packet is PlayerInputPacket playerInputPacket) // Player Input
+            {
+                await _playHandler.HandlePlayerInputAsync(connection, playerInputPacket);
+            }
             else
             {
                 // TODO: Handle other PLAY state packets

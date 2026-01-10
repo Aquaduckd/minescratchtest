@@ -19,6 +19,7 @@ public class Player
     public int ViewDistance { get; }
     public Inventory Inventory { get; }
     public byte GameMode { get; set; } // 0=Survival, 1=Creative, 2=Adventure, 3=Spectator
+    public bool IsSneaking { get; private set; }
     public HashSet<(int X, int Z)> LoadedChunks { get; }
     private readonly HashSet<(int X, int Z)> _chunksLoadingInProgress = new HashSet<(int X, int Z)>();
     private readonly object _chunkLock = new object();
@@ -82,6 +83,20 @@ public class Player
     public void UpdateHeadYaw(float headYaw)
     {
         HeadYaw = headYaw;
+    }
+    
+    /// <summary>
+    /// Updates the sneaking state of the player.
+    /// Returns true if the sneaking state changed.
+    /// </summary>
+    public bool UpdateSneakingState(bool isSneaking)
+    {
+        if (IsSneaking != isSneaking)
+        {
+            IsSneaking = isSneaking;
+            return true;
+        }
+        return false;
     }
 
     /// <summary>

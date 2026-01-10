@@ -832,6 +832,49 @@ public class PacketBuilder
     }
 
     /// <summary>
+    /// Builds a Set Entity Metadata packet (0x61).
+    /// Updates one or more metadata properties for an existing entity.
+    /// </summary>
+    /// <param name="entityId">The entity ID whose metadata to update</param>
+    /// <param name="isSneaking">Whether the entity is sneaking</param>
+    public static byte[] BuildSetEntityMetadataPacket(int entityId, bool isSneaking)
+    {
+        var packetWriter = new ProtocolWriter();
+        packetWriter.WriteVarInt(0x61); // Set Entity Metadata packet ID
+
+        // Entity ID
+        packetWriter.WriteVarInt(entityId);
+
+        // Entity Metadata format: Array of (Index, Type, Value) entries, terminated with 0xFF
+        
+        // Index 0: Entity flags (Byte)
+        // Bit 0x02 = Is pressing sneak key (hides name tag but doesn't make entity visually sneak)
+        packetWriter.WriteByte(0); // Index 0
+        packetWriter.WriteVarInt(0); // Type 0 = Byte
+        byte entityFlags = (byte)(isSneaking ? 0x02 : 0x00); // Set bit 0x02 if sneaking
+        packetWriter.WriteByte(entityFlags);
+
+        // Index 6: Pose (for Living Entity, which Player extends)
+        // Type 20 = Pose (VarInt Enum)
+        // Value: 0 = STANDING, 5 = SNEAKING
+        packetWriter.WriteByte(6); // Index 6 (Living Entity metadata)
+        packetWriter.WriteVarInt(20); // Type 20 = Pose metadata type
+        int pose = isSneaking ? 5 : 0; // 5 = SNEAKING, 0 = STANDING
+        packetWriter.WriteVarInt(pose);
+
+        // Terminate metadata array with 0xFF
+        packetWriter.WriteByte(0xFF);
+
+        // Build final packet with length prefix
+        var packetData = packetWriter.ToArray();
+        var finalWriter = new ProtocolWriter();
+        finalWriter.WriteVarInt(packetData.Length);
+        finalWriter.WriteBytes(packetData);
+        
+        return finalWriter.ToArray();
+    }
+
+    /// <summary>
     /// Builds a Remove Entities packet (0x4B).
     /// Removes entities from the client.
     /// </summary>
