@@ -751,7 +751,10 @@ public class PacketBuilder
         // Fixed BitSet size = ceil(6/8) = 1 byte
         const int NUM_PLAYER_INFO_ACTIONS = 6;
         const int ADD_PLAYER_ACTION_BIT = 0x01; // Bit 0
-        packetWriter.WriteFixedBitSet(ADD_PLAYER_ACTION_BIT, NUM_PLAYER_INFO_ACTIONS);
+        const int UPDATE_LISTED_ACTION_BIT = 0x08; // Bit 3
+        // Include both Add Player and Update Listed actions
+        int actions = ADD_PLAYER_ACTION_BIT | UPDATE_LISTED_ACTION_BIT; // 0x09
+        packetWriter.WriteFixedBitSet(actions, NUM_PLAYER_INFO_ACTIONS);
 
         // Players: Prefixed Array
         packetWriter.WriteVarInt(players.Count);
@@ -762,11 +765,11 @@ public class PacketBuilder
             packetWriter.WriteUuid(uuid);
             
             // Player Actions array - length determined by which actions are set
-            // For Add Player action, we need to write:
+            // Actions must be written in order of bit position (bit 0 first, then bit 3)
+            
+            // Action 0x01: Add Player
             // - Name (String, 16 chars max)
             // - Properties (Prefixed Array, can be empty)
-            
-            // Name
             if (string.IsNullOrEmpty(name))
             {
                 throw new ArgumentException("Player name cannot be null or empty", nameof(players));
@@ -778,6 +781,45 @@ public class PacketBuilder
             // Properties: Prefixed Array (can be empty for offline mode)
             // Empty array means client will use default skin based on UUID
             packetWriter.WriteVarInt(0); // Empty properties array
+            
+            // Action 0x08: Update Listed
+            // - Listed (Boolean)
+            packetWriter.WriteBool(true); // Players should be listed in tab list
+        }
+
+        // Build final packet with length prefix
+        var packetData = packetWriter.ToArray();
+        var finalWriter = new ProtocolWriter();
+        finalWriter.WriteVarInt(packetData.Length);
+        finalWriter.WriteBytes(packetData);
+        
+        return finalWriter.ToArray();
+    }
+
+    /// <summary>
+    /// Builds a Player Info Remove packet (0x43).
+    /// Removes players from the client's player list (tab list).
+    /// </summary>
+    /// <param name="playerUuids">List of player UUIDs to remove</param>
+    public static byte[] BuildPlayerInfoRemovePacket(List<Guid> playerUuids)
+    {
+        if (playerUuids == null)
+        {
+            throw new ArgumentNullException(nameof(playerUuids), "Player UUIDs list cannot be null");
+        }
+        if (playerUuids.Count == 0)
+        {
+            throw new ArgumentException("Player UUIDs list cannot be empty", nameof(playerUuids));
+        }
+
+        var packetWriter = new ProtocolWriter();
+        packetWriter.WriteVarInt(0x43); // Player Info Remove packet ID
+
+        // UUIDs: Prefixed Array of UUID
+        packetWriter.WriteVarInt(playerUuids.Count);
+        foreach (Guid uuid in playerUuids)
+        {
+            packetWriter.WriteUuid(uuid);
         }
 
         // Build final packet with length prefix

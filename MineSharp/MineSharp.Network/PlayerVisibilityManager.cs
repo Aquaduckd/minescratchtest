@@ -218,7 +218,7 @@ public class PlayerVisibilityManager
 
     /// <summary>
     /// Called when a player disconnects.
-    /// Despawns the player for all other players.
+    /// Despawns the player for all other players and removes them from the tab list.
     /// </summary>
     public async Task OnPlayerDisconnectedAsync(Player disconnectedPlayer)
     {
@@ -228,6 +228,27 @@ public class PlayerVisibilityManager
         }
 
         var allConnections = _getAllConnections().ToList();
+
+        // Send Player Info Remove packet to all remaining players to remove disconnected player from tab list
+        var playerUuidsToRemove = new List<Guid> { disconnectedPlayer.Uuid };
+        var removePacket = PacketBuilder.BuildPlayerInfoRemovePacket(playerUuidsToRemove);
+
+        foreach (var connection in allConnections)
+        {
+            if (connection.Player == null || connection.Player == disconnectedPlayer)
+            {
+                continue;
+            }
+
+            try
+            {
+                await connection.SendPacketAsync(removePacket);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error sending Player Info Remove to player: {ex.Message}");
+            }
+        }
 
         // Despawn this player for all other players
         foreach (var connection in allConnections)
@@ -342,6 +363,17 @@ public class PlayerVisibilityManager
             {
                 Console.WriteLine($"Error sending Player Info Update (new player) to existing player: {ex.Message}");
             }
+        }
+
+        // Also send Player Info Update for the new player to themselves (so they appear in their own tab list)
+        try
+        {
+            var selfPlayerInfoPacket = PacketBuilder.BuildPlayerInfoUpdatePacket(newPlayerInfo);
+            await newConnection.SendPacketAsync(selfPlayerInfoPacket);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error sending Player Info Update (self) to new player: {ex.Message}");
         }
     }
 
